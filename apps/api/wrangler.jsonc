@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "kanbaan-api",
+  "name": "kaambaan-api",
   "main": "src/index.ts",
   "compatibility_date": "2025-11-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -10,8 +10,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "kanbaan-catalog",
-      // Run `wrangler d1 create kanbaan-catalog` and paste the id here.
+      "database_name": "kaambaan-catalog",
+      // Run `wrangler d1 create kaambaan-catalog` and paste the id here.
       "database_id": "REPLACE_WITH_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }

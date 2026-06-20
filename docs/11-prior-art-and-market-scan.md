@@ -1,6 +1,6 @@
 # 11 — Prior Art & Market Scan
 
-The competitive and standards landscape Kanbaan draws on, and where the whitespace is. This is the
+The competitive and standards landscape Kaambaan draws on, and where the whitespace is. This is the
 "why our design is what it is" doc — every major decision in specs 00–10 traces to a learning here.
 
 ## 1. The landscape
@@ -63,7 +63,7 @@ The market splits cleanly:
 - **Autonomous SWE SaaS** (Devin, Factory, Copilot agent) — powerful, but single-org and
   coding-centric, without heterogeneous-external-agent pipelines.
 
-**No one occupies the union Kanbaan targets:**
+**No one occupies the union Kaambaan targets:**
 
 > **multi-tenant · harness-agnostic · domain-agnostic · pipeline with real human gates · over
 > external agents that run anywhere.**
@@ -85,7 +85,7 @@ and local-runner shapes did not become durable standalone products. The defensib
 
 ## 6. Sources
 
-Captured in team memory `kanbaan-research-sources`. Primary: Linear developer docs, Hermes docs,
+Captured in team memory `kaambaan-research-sources`. Primary: Linear developer docs, Hermes docs,
 Vibe Kanban (BloopAI), Conductor/Claude Squad/Crystal/Sculptor, Devin & Factory docs, GitHub Copilot
 coding-agent docs, CrewAI / OpenAI Agents SDK / AutoGen / Semantic Kernel / ADK, HumanLayer &
 12-factor-agents, MCP & LangGraph & Temporal & Cloudflare Workflows docs, OTel-GenAI / OpenInference

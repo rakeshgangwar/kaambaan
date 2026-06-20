@@ -1,5 +1,5 @@
 {
-  "name": "@kanbaan/web",
+  "name": "@kaambaan/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@kanbaan/contract": "workspace:*",
+    "@kaambaan/contract": "workspace:*",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

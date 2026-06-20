@@ -1,11 +1,11 @@
-# Kanbaan — Documentation
+# Kaambaan — Documentation
 
-> **Kanbaan** is a multi-tenant Kanban board that orchestrates **external AI agents**.
+> **Kaambaan** is a multi-tenant Kanban board that orchestrates **external AI agents**.
 > The board is the control plane; the agents bring their own runtime. Work flows
 > through pipeline stages with human approval gates.
 >
-> *Name:* a pun on **Kanban** + Hindi **बाण** (*bāṇ*, "arrow") — work you fire toward Done.
-> Pronounced ~"kan-baan".
+> *Name:* **काम** (*kaam*, "work") + **बाण** (*bāṇ*, "arrow") — the arrows of work you fire
+> toward Done; also a nod to **Kanban**. Pronounced ~"kaam-baan".
 
 These documents are the **source of truth**. We are **docs-first, then strict TDD**:
 every behavioral statement here should become an executable test before its code exists.
@@ -16,7 +16,7 @@ deliberately rather than by accident.
 
 | # | Doc | What it answers | Status |
 |---|-----|-----------------|--------|
-| 00 | [Vision & Principles](./00-vision-and-principles.md) | Why Kanbaan exists, what it is and isn't, the rules it holds itself to | ✅ Draft |
+| 00 | [Vision & Principles](./00-vision-and-principles.md) | Why Kaambaan exists, what it is and isn't, the rules it holds itself to | ✅ Draft |
 | 01 | [Domain Model & Glossary](./01-domain-model-and-glossary.md) | The nouns: Tenant, Board, Card, Task, Run, Agent, Activity, Signal, Reference | ✅ Draft |
 | 02 | [Architecture](./02-architecture.md) | The Cloudflare topology, multi-tenancy, auth, data flow | ✅ Draft |
 | 03 | [Card Lifecycle & Pipeline](./03-card-lifecycle.md) | The A2A-aligned state machine, stages, gates, handoff, rework | ✅ Draft |
@@ -31,7 +31,7 @@ deliberately rather than by accident.
 
 ## The one-paragraph design
 
-Kanbaan's contract is anchored on the **A2A protocol** (Linux Foundation) — its `Task`
+Kaambaan's contract is anchored on the **A2A protocol** (Linux Foundation) — its `Task`
 object and state machine model "dispatch long-running work to a remote agent, stream
 artifacts, pause for human input." On top of that spine we layer **Linear's** accountability
 and UX model (delegate-not-owner, an append-only typed activity log that *derives* state,
@@ -47,5 +47,5 @@ exposed two ways — an **MCP server** (for Claude Code / Codex / OpenCode / Cur
 Design ideas adapted from [Linear's agent platform](https://linear.app/developers/aig),
 [Nous Research's Hermes kanban](https://hermes-agent.nousresearch.com/docs/), the
 [A2A protocol](https://a2a-protocol.org), [MCP](https://modelcontextprotocol.io), and
-[AG-UI](https://docs.ag-ui.com). See the team memory `kanbaan-research-sources` for the
+[AG-UI](https://docs.ag-ui.com). See the team memory `kaambaan-research-sources` for the
 full reference list.

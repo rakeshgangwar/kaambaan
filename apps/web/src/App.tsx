@@ -1,4 +1,4 @@
-import { TaskState } from '@kanbaan/contract';
+import { TaskState } from '@kaambaan/contract';
 
 /**
  * P0 placeholder. The live board (Durable Object WebSocket + drag-and-drop) lands in P1
@@ -13,7 +13,7 @@ export function App() {
 
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem' }}>
-      <h1>Kanbaan</h1>
+      <h1>Kaambaan</h1>
       <p style={{ color: '#666' }}>
         Orchestrating external AI agents · {states.length} canonical task states
       </p>

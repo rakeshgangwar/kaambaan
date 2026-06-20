@@ -3,7 +3,7 @@
 Phased delivery. Each phase is a **working, tested vertical slice** — not a horizontal layer — so
 there is always something runnable, and every phase lands with the tests from
 [09 — Testing Strategy](./09-testing-strategy.md). The **demo milestone** (P4) is the north star for
-v1: *point Claude Code at Kanbaan's MCP endpoint and drive a card through a 3-stage pipeline with a
+v1: *point Claude Code at Kaambaan's MCP endpoint and drive a card through a 3-stage pipeline with a
 human gate, live on a multi-tenant board.*
 
 ## P0 — Foundations

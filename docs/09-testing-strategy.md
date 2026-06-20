@@ -1,6 +1,6 @@
 # 09 — Testing Strategy (TDD)
 
-Kanbaan is built **docs-first → test-first**. The normative tables in the specs are not
+Kaambaan is built **docs-first → test-first**. The normative tables in the specs are not
 documentation flavour — each row is an executable test written **before** its implementation.
 This doc defines the method, the layers, and the suites that must exist.
 
@@ -65,7 +65,7 @@ so deterministic time control is essential.
 ## 5. The agent conformance kit
 
 A first-class deliverable: a runnable suite an external agent author points at a throwaway board to
-certify **"Kanbaan-compatible"** ([04 conformance](./04-agent-contract.md)). It drives the agent
+certify **"Kaambaan-compatible"** ([04 conformance](./04-agent-contract.md)). It drives the agent
 through: register → claim → ack within SLA → heartbeat → stream activities → request input →
 submit for review → handle approve/decline → complete with handoff → behave on reclaim. It runs the
 same agent over **MCP and REST** and reports a capability matrix. This both protects the contract

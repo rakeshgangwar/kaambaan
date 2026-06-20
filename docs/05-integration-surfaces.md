@@ -41,10 +41,10 @@ activities are the immutable record; `usage` feeds per-tenant metering ([07](./0
 
 ## 2. MCP server surface
 
-Kanbaan exposes a **remote MCP server over Streamable HTTP** at `/mcp`, so any MCP-capable
+Kaambaan exposes a **remote MCP server over Streamable HTTP** at `/mcp`, so any MCP-capable
 harness becomes a board worker.
 
-- **Auth**: OAuth 2.1; Kanbaan is the **Resource Server**. Unauthenticated → `401` +
+- **Auth**: OAuth 2.1; Kaambaan is the **Resource Server**. Unauthenticated → `401` +
   `WWW-Authenticate` → client discovers `/.well-known/oauth-protected-resource` → PKCE flow →
   audience-validated bearer. **Validate the token audience; never pass tokens upstream.**
 - **Session**: `Mcp-Session-Id` header; validate `Origin` (DNS-rebinding defense).
@@ -53,15 +53,15 @@ harness becomes a board worker.
 
 | Tool | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
 |------|:-:|:-:|:-:|
-| `kanbaan_claim_card` | ✗ | ✗ | ✗ |
-| `kanbaan_get_card` | ✓ | — | ✓ |
-| `kanbaan_heartbeat` | ✗ | ✗ | ✓ |
-| `kanbaan_post_activity` | ✗ | ✗ | ✗ |
-| `kanbaan_request_input` | ✗ | ✗ | ✗ |
-| `kanbaan_add_reference` | ✗ | ✗ | ✓ |
-| `kanbaan_submit_for_review` | ✗ | ✗ | ✗ |
-| `kanbaan_complete` | ✗ | ✗ | ✗ |
-| `kanbaan_block` / `_release` / `_fail` | ✗ | ✓ | ✗ |
+| `kaambaan_claim_card` | ✗ | ✗ | ✗ |
+| `kaambaan_get_card` | ✓ | — | ✓ |
+| `kaambaan_heartbeat` | ✗ | ✗ | ✓ |
+| `kaambaan_post_activity` | ✗ | ✗ | ✗ |
+| `kaambaan_request_input` | ✗ | ✗ | ✗ |
+| `kaambaan_add_reference` | ✗ | ✗ | ✓ |
+| `kaambaan_submit_for_review` | ✗ | ✗ | ✗ |
+| `kaambaan_complete` | ✗ | ✗ | ✗ |
+| `kaambaan_block` / `_release` / `_fail` | ✗ | ✓ | ✗ |
 
 - **Business failures** return `isError: true` (model-visible, self-correctable), not transport
   errors. Transport errors are reserved for "tool not found"/bad args.
@@ -125,7 +125,7 @@ fast-follow.
 | Harness | How it connects | Notes |
 |---|---|---|
 | **Claude Code** | Remote **MCP client** in `.mcp.json` (`type:"http"`, `url`, `headers`/`headersHelper`); run headless `claude -p --input-format stream-json --output-format stream-json` | Strongest fit; dynamic per-task auth headers; `normalizeEvents` parses `stream-json` |
-| **OpenAI Codex** | Remote MCP via `experimental_use_rmcp_client=true` + `[mcp_servers.kanbaan]` (`url`, `bearer_token_env_var`); run `codex exec --json` | NDJSON event stream; per-task header injection rougher |
+| **OpenAI Codex** | Remote MCP via `experimental_use_rmcp_client=true` + `[mcp_servers.kaambaan]` (`url`, `bearer_token_env_var`); run `codex exec --json` | NDJSON event stream; per-task header injection rougher |
 | **OpenCode** | Remote MCP in `opencode.json`; **native REST/SSE** via `opencode serve` (`/session`, `/global/event`) | Can drive over REST without MCP at all |
 | **Cloudflare Agents** | Hosts MCP client *and* REST/webhook listener; `addMcpServer(url,{headers})` | The natural webhook/REST front-end + MCP hub for the others |
 | **Any (REST)** | Poll `claim`, post activities/heartbeats, complete | Lowest common denominator; works everywhere |
@@ -136,13 +136,13 @@ copy-paste starting point for operators.
 ## 6. Inbound triggers — many sources, one Task path
 
 Convergent industry pattern (Devin/Factory/Cursor/Copilot): **`@mention` or label/assignment on
-an existing tracker → a task.** Kanbaan models every trigger as an **adapter that funnels into one
+an existing tracker → a task.** Kaambaan models every trigger as an **adapter that funnels into one
 `createCard` path**, attaching the originating resource as a reference + context:
 
 - **API/SDK** — `POST /v1/boards/:id/cards`.
 - **GitHub issue** — issue labeled/assigned → card created, issue attached as a reference
   ([06](./06-external-references.md)).
-- **Slack** — `@kanbaan <task>` → card created in a default board.
+- **Slack** — `@kaambaan <task>` → card created in a default board.
 - **Webhook** — generic inbound.
 - **Schedule** — recurring cards via a Workflow cron.
 

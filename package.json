@@ -1,5 +1,5 @@
 {
-  "name": "kanbaan",
+  "name": "kaambaan",
   "version": "0.0.0",
   "private": true,
   "description": "A multi-tenant Kanban board that orchestrates external AI agents through pipeline stages with human approval gates.",

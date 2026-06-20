@@ -1,6 +1,6 @@
 # 02 — Architecture
 
-Kanbaan runs on **Cloudflare**. The shape of the platform maps unusually well onto the
+Kaambaan runs on **Cloudflare**. The shape of the platform maps unusually well onto the
 problem: Durable Objects give us a single-threaded, strongly-consistent live authority per
 board (atomic claims for free), D1 gives us a queryable multi-tenant catalog, Workflows/Queues
 give us durable webhook delivery and timeouts, and Workers give us a global edge for auth and
@@ -38,7 +38,7 @@ A single Worker that:
 - **Serves the React app** (static assets) and the API.
 - **Terminates auth**: resolves a request to `{principal, tenant}` *before* anything else.
   Humans → session cookie (KV-backed). Agents → bearer token (MCP `Authorization` header or
-  REST). MCP auth follows OAuth 2.1 with Kanbaan as the **Resource Server** (see
+  REST). MCP auth follows OAuth 2.1 with Kaambaan as the **Resource Server** (see
   Integration Surfaces, planned).
 - **Authorizes**: checks the principal's membership/role or the agent's tenant + scopes.
 - **Routes** to the correct **Board Durable Object** (by `boardId → DO id`) and to the MCP
@@ -105,7 +105,7 @@ Human session tokens, short-lived caches (e.g. resolved tenant routing), feature
 | Principal | Mechanism | Carrier |
 |---|---|---|
 | Human | OAuth (GitHub/Google) or email magic-link → session | Cookie (KV-backed) |
-| Agent (MCP) | OAuth 2.1; Kanbaan = Resource Server; audience-validated bearer | `Authorization: Bearer` on `/mcp` |
+| Agent (MCP) | OAuth 2.1; Kaambaan = Resource Server; audience-validated bearer | `Authorization: Bearer` on `/mcp` |
 | Agent (REST) | Per-agent bearer token, tenant+capability scoped | `Authorization: Bearer` on `/v1/*` |
 | Inbound webhook (GitHub) | HMAC-SHA256 signature verify | `X-Hub-Signature-256` |
 | Outbound webhook (to agents) | Signed delivery (A2A PushNotificationConfig pattern: JWT/HMAC) | `Authorization` / signature header |
@@ -135,7 +135,7 @@ Human session tokens, short-lived caches (e.g. resolved tenant routing), feature
 ## Repository shape (proposed)
 
 ```
-kanbaan/
+kaambaan/
 ├── docs/                      # this spec set (source of truth)
 ├── packages/
 │   └── contract/              # zod schemas + types for the shared contract (A2A-aligned)

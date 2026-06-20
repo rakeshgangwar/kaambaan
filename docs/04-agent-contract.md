@@ -1,12 +1,12 @@
 # 04 — Agent Contract
 
-This is the contract every external agent speaks to participate in a Kanbaan board. It is
+This is the contract every external agent speaks to participate in a Kaambaan board. It is
 defined **once**, surface-agnostic, and projected onto two wire surfaces — an **MCP server**
 and a **REST + webhook API** (detailed in `05-integration-surfaces`, planned). The contract is
 A2A at its core, with Linear's activity/signal model for transparency and human-in-the-loop.
 
 > **Conformance definition:** an agent that implements the verbs in §3 and emits the activity
-> vocabulary in §4, honoring the SLAs in §5, is **Kanbaan-compatible** — regardless of harness,
+> vocabulary in §4, honoring the SLAs in §5, is **Kaambaan-compatible** — regardless of harness,
 > language, or where it runs.
 
 ## 1. Identity & accountability
@@ -17,19 +17,19 @@ A2A at its core, with Linear's activity/signal model for transparency and human-
   human). When an agent claims a card it becomes `card.delegateAgentId`; the human
   `ownerUserId` is untouched. *(Linear delegate model — Principle 3.)*
 - An agent advertises what it can do via an **A2A AgentCard** (skills, input/output modes,
-  `capabilities.streaming`, `capabilities.pushNotifications`). Kanbaan stores this as the
+  `capabilities.streaming`, `capabilities.pushNotifications`). Kaambaan stores this as the
   agent's capability registry and uses its `capabilities` tags for routing.
 
 ## 2. Onboarding
 
 1. **Register** the agent to a tenant (human admin action in the UI, or an admin API call):
    name, icon, capability tags, connection type(s), concurrency limit.
-2. Kanbaan issues a **bearer token** scoped to the tenant (optionally to specific boards /
-   capabilities). MCP agents obtain tokens via OAuth 2.1 (Kanbaan is the Resource Server);
+2. Kaambaan issues a **bearer token** scoped to the tenant (optionally to specific boards /
+   capabilities). MCP agents obtain tokens via OAuth 2.1 (Kaambaan is the Resource Server);
    REST agents use issued tokens directly.
 3. The agent connects: as an **MCP client** to `/mcp`, and/or via **REST** to `/v1/*`, and/or
    by registering a **webhook** endpoint for push dispatch.
-4. **Discovery**: the agent can fetch Kanbaan's AgentCard at
+4. **Discovery**: the agent can fetch Kaambaan's AgentCard at
    `/.well-known/agent-card.json` (per board/tenant) to learn the available verbs and skills.
 
 ## 3. The verbs
@@ -39,17 +39,17 @@ semantics. Signatures are illustrative (finalized as zod schemas in `packages/co
 
 | Verb | Direction | Purpose | Result / effect |
 |------|-----------|---------|-----------------|
-| `discover` | agent → Kanbaan | Fetch AgentCard / available boards & stages it may work | capabilities + board list |
-| `claim` | agent → Kanbaan | Atomically pull the next *ready* card in a stage it owns | Task (`working`) + context bundle, or *empty* |
-| `getCard` | agent → Kanbaan | Read a card's spec, references, current task, handoff metadata | card snapshot (read-only) |
-| `heartbeat` | agent → Kanbaan | Keep the run alive | ack; resets stale/reclaim timers |
-| `activity` | agent → Kanbaan | Emit typed progress (`thought/action/response/elicitation/error`) | appended (immutable); state derived |
-| `requestInput` | agent → Kanbaan | Ask the human a question / present choices (elicitation + signal) | Task → `input-required` |
-| `addReference` | agent → Kanbaan | Attach an external link (GitHub PR/issue, repo, doc) | idempotent upsert on `(cardId, url)` |
-| `submitForReview` | agent → Kanbaan | Hand a gated stage to a human approver | Task → `input-required` (`select` signal) |
-| `complete` | agent → Kanbaan | Finish the stage successfully with structured handoff | Task → `completed`; card advances |
-| `block` | agent → Kanbaan | Escalate; cannot proceed without human help | Task → `input-required`/blocked |
-| `release` / `fail` | agent → Kanbaan | Give the claim back / report failure | Task → `submitted` (reclaim) / `failed` |
+| `discover` | agent → Kaambaan | Fetch AgentCard / available boards & stages it may work | capabilities + board list |
+| `claim` | agent → Kaambaan | Atomically pull the next *ready* card in a stage it owns | Task (`working`) + context bundle, or *empty* |
+| `getCard` | agent → Kaambaan | Read a card's spec, references, current task, handoff metadata | card snapshot (read-only) |
+| `heartbeat` | agent → Kaambaan | Keep the run alive | ack; resets stale/reclaim timers |
+| `activity` | agent → Kaambaan | Emit typed progress (`thought/action/response/elicitation/error`) | appended (immutable); state derived |
+| `requestInput` | agent → Kaambaan | Ask the human a question / present choices (elicitation + signal) | Task → `input-required` |
+| `addReference` | agent → Kaambaan | Attach an external link (GitHub PR/issue, repo, doc) | idempotent upsert on `(cardId, url)` |
+| `submitForReview` | agent → Kaambaan | Hand a gated stage to a human approver | Task → `input-required` (`select` signal) |
+| `complete` | agent → Kaambaan | Finish the stage successfully with structured handoff | Task → `completed`; card advances |
+| `block` | agent → Kaambaan | Escalate; cannot proceed without human help | Task → `input-required`/blocked |
+| `release` / `fail` | agent → Kaambaan | Give the claim back / report failure | Task → `submitted` (reclaim) / `failed` |
 
 ### Claim semantics (the critical verb)
 - **Atomic.** The Board DO's single thread guarantees exactly one agent receives a given card.
@@ -125,15 +125,15 @@ The same verb on two surfaces — full detail in `05-integration-surfaces` (plan
 
 | Verb | MCP tool (`tools/call`) | REST endpoint |
 |------|--------------------------|---------------|
-| `claim` | `kanbaan_claim_card` *(not read-only, not idempotent)* | `POST /v1/boards/:id/claims` |
-| `getCard` | `kanbaan_get_card` *(`readOnlyHint: true`)* | `GET /v1/cards/:id` |
-| `heartbeat` | `kanbaan_heartbeat` | `POST /v1/runs/:id/heartbeat` |
-| `activity` | `kanbaan_post_activity` | `POST /v1/runs/:id/activities` |
-| `requestInput` | `kanbaan_request_input` | `POST /v1/runs/:id/activities` (elicitation) |
-| `addReference` | `kanbaan_add_reference` | `PUT /v1/cards/:id/references` |
-| `submitForReview` | `kanbaan_submit_for_review` | `POST /v1/runs/:id/submit` |
-| `complete` | `kanbaan_complete` | `POST /v1/runs/:id/complete` |
-| `block` / `release` / `fail` | `kanbaan_block` / `_release` / `_fail` | `POST /v1/runs/:id/{block,release,fail}` |
+| `claim` | `kaambaan_claim_card` *(not read-only, not idempotent)* | `POST /v1/boards/:id/claims` |
+| `getCard` | `kaambaan_get_card` *(`readOnlyHint: true`)* | `GET /v1/cards/:id` |
+| `heartbeat` | `kaambaan_heartbeat` | `POST /v1/runs/:id/heartbeat` |
+| `activity` | `kaambaan_post_activity` | `POST /v1/runs/:id/activities` |
+| `requestInput` | `kaambaan_request_input` | `POST /v1/runs/:id/activities` (elicitation) |
+| `addReference` | `kaambaan_add_reference` | `PUT /v1/cards/:id/references` |
+| `submitForReview` | `kaambaan_submit_for_review` | `POST /v1/runs/:id/submit` |
+| `complete` | `kaambaan_complete` | `POST /v1/runs/:id/complete` |
+| `block` / `release` / `fail` | `kaambaan_block` / `_release` / `_fail` | `POST /v1/runs/:id/{block,release,fail}` |
 
 MCP tools carry honest **annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`)
 so harnesses prompt humans appropriately. Business failures return MCP `isError: true`

@@ -1,10 +1,10 @@
-# Kanbaan
+# Kaambaan
 
 A multi-tenant Kanban board that orchestrates **external AI agents** — running anywhere, under
 any harness (Claude Code, Codex, OpenCode, Cloudflare Agents) — through pipeline stages with
 human approval gates. The board is the control plane; agents bring their own runtime.
 
-> *Name:* a pun on **Kanban** + Hindi **बाण** (*bāṇ*, "arrow") — work you fire toward Done.
+> *Name:* **काम** (*kaam*, "work") + **बाण** (*bāṇ*, "arrow") — the arrows of work you fire toward Done; also a nod to **Kanban**.
 
 ## Status
 

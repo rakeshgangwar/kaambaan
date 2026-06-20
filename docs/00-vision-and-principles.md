@@ -2,7 +2,7 @@
 
 ## The one-liner
 
-**Kanbaan is a multi-tenant Kanban board where external AI agents — running anywhere, under
+**Kaambaan is a multi-tenant Kanban board where external AI agents — running anywhere, under
 any harness — pull work, do it, and move cards through pipeline stages with human approval
 gates.**
 
@@ -15,9 +15,9 @@ work, reports progress transparently, hands off between stages, and waits for a 
 go-ahead at the moments that matter. Orchestration today is either (a) locked inside a single
 vendor's runtime (e.g. Hermes spawns its own workers), or (b) a pile of bespoke glue scripts.
 
-Kanbaan is the missing **control plane**: a board that any agent can connect into.
+Kaambaan is the missing **control plane**: a board that any agent can connect into.
 
-## What Kanbaan **is**
+## What Kaambaan **is**
 
 - A **durable, multi-tenant board** that is the single source of truth for work state.
 - An **orchestrator and observability layer** — it assigns, sequences, gates, and audits work.
@@ -25,13 +25,13 @@ Kanbaan is the missing **control plane**: a board that any agent can connect int
   **REST + webhook API**.
 - A **human-in-the-loop** system: approval gates are first-class, not bolted on.
 
-## What Kanbaan is **NOT** (non-goals)
+## What Kaambaan is **NOT** (non-goals)
 
-- **Not an agent runtime.** Kanbaan never executes the model, the tools, or the shell. The
+- **Not an agent runtime.** Kaambaan never executes the model, the tools, or the shell. The
   agent's brain and sandbox live on the operator's machine/VPS/cloud. *(This is the defining
   inversion from Hermes, which owns execution.)*
 - **Not a coding assistant.** Work is **domain-agnostic**; a card's meaning is opaque to
-  Kanbaan. Coding is just one use case among research, ops, content, data, etc.
+  Kaambaan. Coding is just one use case among research, ops, content, data, etc.
 - **Not a chat app.** Conversation happens on cards as structured activity, not as a freeform
   thread that agents must scrape for state.
 - **Not single-vendor.** No assumption that agents are "our" agents. Any A2A/MCP-capable
@@ -39,13 +39,13 @@ Kanbaan is the missing **control plane**: a board that any agent can connect int
 
 ## Positioning
 
-| | What it is | How Kanbaan differs |
+| | What it is | How Kaambaan differs |
 |---|---|---|
-| **Linear (agents)** | An issue tracker that lets vendor agents act on issues | Kanbaan is *board-first and agent-first*: the board exists to orchestrate a fleet, not to track human issues that agents occasionally touch. We borrow Linear's interaction model wholesale. |
-| **Hermes (Nous)** | A single-vendor orchestrator that spawns its own local/cloud workers via a durable SQLite kanban | Kanbaan does **not** spawn or own workers. External, heterogeneous agents connect over the wire. Tenancy is **hard**, not a soft filter. References are first-class. |
-| **A2A / MCP** | Wire protocols for agent↔agent / agent↔tools | Kanbaan is a *product* built on these protocols — it adds the board, the pipeline, the gates, the multi-tenancy, and the human UX. |
+| **Linear (agents)** | An issue tracker that lets vendor agents act on issues | Kaambaan is *board-first and agent-first*: the board exists to orchestrate a fleet, not to track human issues that agents occasionally touch. We borrow Linear's interaction model wholesale. |
+| **Hermes (Nous)** | A single-vendor orchestrator that spawns its own local/cloud workers via a durable SQLite kanban | Kaambaan does **not** spawn or own workers. External, heterogeneous agents connect over the wire. Tenancy is **hard**, not a soft filter. References are first-class. |
+| **A2A / MCP** | Wire protocols for agent↔agent / agent↔tools | Kaambaan is a *product* built on these protocols — it adds the board, the pipeline, the gates, the multi-tenancy, and the human UX. |
 
-## Principles (the Kanbaan Interaction Principles)
+## Principles (the Kaambaan Interaction Principles)
 
 Adapted from Linear's Agent Interaction Guidelines and hardened for our orchestration model.
 These are normative — tests and reviews should be able to cite them.
@@ -53,7 +53,7 @@ These are normative — tests and reviews should be able to cite them.
 1. **The board is the source of truth.** State lives in a durable, append-only log. Nothing
    important exists only in an agent's head or a mutable comment.
 
-2. **Kanbaan orchestrates; it never executes.** We dispatch work and receive results. We make
+2. **Kaambaan orchestrates; it never executes.** We dispatch work and receive results. We make
    no assumption about where or how the agent runs.
 
 3. **A human always owns; an agent only ever delegates.** Every card has a human **owner**.
@@ -90,5 +90,5 @@ These are normative — tests and reviews should be able to cite them.
 - An operator can register an external agent (any harness) and have it **claim, work, and
   advance** a card through a 3-stage pipeline with a human approval gate in the middle —
   visible live on the board — using **either** the MCP **or** the REST surface.
-- The demo target: point **Claude Code** at Kanbaan's MCP endpoint and watch it drive a card
+- The demo target: point **Claude Code** at Kaambaan's MCP endpoint and watch it drive a card
   end-to-end on a real multi-tenant board.

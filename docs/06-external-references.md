@@ -89,7 +89,7 @@ reference-based gate conditions.
 
 ## 5. Repos & docs
 
-- **Repository** references record `{ hostname, fullName, defaultBranch }`. Unlike Hermes, Kanbaan
+- **Repository** references record `{ hostname, fullName, defaultBranch }`. Unlike Hermes, Kaambaan
   does **not** mount or own the repo — the *remote agent* resolves it in its own sandbox; we track
   the **branch/ref** it produces as the integration unit ("workspace = unit of delegation; branch
   + PR = unit of integration").

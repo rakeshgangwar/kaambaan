@@ -36,10 +36,10 @@ is both a product feature (live board + audit) and standards-compatible telemetr
   "traceId": "…", "spanId": "…", "parentId": "…", "path": "/pipeline/stageB/run/tool",
   "sessionId": "card_…",            // a CARD's life = a session (universal grouping key)
   "tenantId": "…", "userId": "…",
-  // type — span-KIND enum (not OTel operation-verbs), plus Kanbaan kinds
+  // type — span-KIND enum (not OTel operation-verbs), plus Kaambaan kinds
   "kind": "AGENT | LLM | TOOL | CHAIN | RETRIEVER | GUARDRAIL | STAGE_TRANSITION | PIPELINE",
   "name": "…",
-  // Kanbaan audit dimensions (no standard has these — we add them)
+  // Kaambaan audit dimensions (no standard has these — we add them)
   "boardId": "…", "cardId": "…", "stageFrom": "research", "stageTo": "review",
   // agent/tool/model
   "agentId": "…", "toolName": "…", "toolCallId": "…", "model": "…", "provider": "…",

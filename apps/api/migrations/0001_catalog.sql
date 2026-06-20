@@ -1,4 +1,4 @@
--- Kanbaan catalog (D1) — the cross-board, identity/authz system of record (docs/02-architecture.md).
+-- Kaambaan catalog (D1) — the cross-board, identity/authz system of record (docs/02-architecture.md).
 -- Every tenant-scoped table carries tenant_id; the data-access layer offers no unscoped read path.
 -- Users are GLOBAL identities; membership ties them to tenants.
 
