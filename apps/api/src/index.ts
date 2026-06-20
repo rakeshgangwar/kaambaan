@@ -20,8 +20,11 @@ import { newId } from './ids';
 export { BoardDO };
 
 function tenantFrom(request: Request): string | null {
-  const t = request.headers.get('X-Tenant-Id');
-  return t && t.trim() !== '' ? t : null;
+  const header = request.headers.get('X-Tenant-Id');
+  if (header && header.trim() !== '') return header;
+  // Browsers can't set headers on a WebSocket upgrade, so allow ?tenant= for the dev feed.
+  const query = new URL(request.url).searchParams.get('tenant');
+  return query && query.trim() !== '' ? query : null;
 }
 
 function boardStub(env: Env, tenantId: string, boardId: string): BoardStub {
