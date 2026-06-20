@@ -41,6 +41,8 @@ function statusForCode(code: BoardErrorCode): number {
     case 'CARD_NOT_FOUND':
     case 'NOT_INITIALIZED':
       return 404;
+    case 'STALE_LEASE':
+      return 409;
   }
 }
 
