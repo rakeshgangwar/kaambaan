@@ -16,6 +16,9 @@ npm-debug.log*
 pnpm-debug.log*
 yarn-error.log*
 
+# SvelteKit
+.svelte-kit/
+
 # Cloudflare / Wrangler
 .wrangler/
 .dev.vars

@@ -8,7 +8,7 @@
   --accent: #6ea8fe;
   --danger: #ff6b6b;
   --ok: #38d39f;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
 * {
