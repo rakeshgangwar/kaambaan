@@ -19,6 +19,12 @@ yarn-error.log*
 # SvelteKit
 .svelte-kit/
 
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
 # Cloudflare / Wrangler
 .wrangler/
 .dev.vars
