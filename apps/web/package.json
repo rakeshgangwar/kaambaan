@@ -4,20 +4,30 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "e2e": "playwright test"
   },
   "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^2.0.1",
     "@kaambaan/contract": "workspace:*",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "bits-ui": "^2.18.1",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.6.0",
+    "tailwind-variants": "^3.2.2"
   },
   "devDependencies": {
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
+    "@playwright/test": "^1.61.0",
+    "@sveltejs/adapter-cloudflare": "^7.2.9",
+    "@sveltejs/kit": "^2.66.0",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tailwindcss/vite": "^4.3.1",
+    "svelte": "^5.56.3",
+    "svelte-check": "^4.6.0",
+    "tailwindcss": "^4.3.1",
+    "typescript": "^6.0.3",
     "vite": "^8.0.16"
   }
 }

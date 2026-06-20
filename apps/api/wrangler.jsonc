@@ -11,10 +11,13 @@
     {
       "binding": "DB",
       "database_name": "kaambaan-catalog",
-      // Run `wrangler d1 create kaambaan-catalog` and paste the id here.
+      // Run `wrangler d1 create kaambaan-catalog` and paste the id here (needed before deploy).
       "database_id": "REPLACE_WITH_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }
-  ]
-  // Board Durable Object binding is added in P1 (see docs/02-architecture.md).
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "BOARD_DO", "class_name": "BoardDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardDO"] }]
 }

@@ -4,4 +4,4 @@ packages:
 allowBuilds:
   esbuild: true
   sharp: false
-  workerd: false
+  workerd: true
