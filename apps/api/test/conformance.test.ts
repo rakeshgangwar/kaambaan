@@ -70,4 +70,27 @@ describe('agent conformance kit', () => {
     const idle = agent(boardId, 'agt_z', 'design');
     expect(await runOnce(idle, async () => undefined)).toBe(false);
   });
+
+  it('fails the run (freeing the card) when the work handler throws', async () => {
+    const boardId = await createBoard();
+    await SELF.fetch(`https://api.test/v1/boards/${boardId}/cards`, {
+      method: 'POST',
+      headers: { 'X-Tenant-Id': 'tnt_a', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Will crash', ownerUserId: 'usr_a' }),
+    });
+    const researcher = agent(boardId, 'agt_r', 'research');
+
+    await expect(
+      runOnce(researcher, async () => {
+        throw new Error('handler boom');
+      }),
+    ).rejects.toThrow('handler boom');
+
+    // The run was failed rather than left hanging, so the card is immediately back to submitted
+    // (one failure, below the breaker) — not stuck 'working' until the 15-minute reclaim.
+    const state = (await (
+      await SELF.fetch(`https://api.test/v1/boards/${boardId}`, { headers: { 'X-Tenant-Id': 'tnt_a' } })
+    ).json()) as { cards: { state: string }[] };
+    expect(state.cards[0]!.state).toBe('submitted');
+  });
 });

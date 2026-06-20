@@ -126,7 +126,13 @@ export async function runOnce(agent: KaambaanAgent, handler: WorkHandler): Promi
   if (!work) return false;
   await agent.heartbeat(work);
   await agent.activity(work, { type: 'thought', body: `working on "${work.card.title}"`, ephemeral: true });
-  const handoff = await handler(work, agent);
-  await agent.complete(work, handoff ?? undefined);
+  try {
+    const handoff = await handler(work, agent);
+    await agent.complete(work, handoff ?? undefined);
+  } catch (err) {
+    // Free the card immediately rather than waiting for the heartbeat-timeout reclaim.
+    await agent.fail(work, err instanceof Error ? err.message : String(err));
+    throw err;
+  }
   return true;
 }
