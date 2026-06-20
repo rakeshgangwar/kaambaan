@@ -1,6 +1,6 @@
 # 08 — Reliability & Durable Execution
 
-Kanbaan coordinates agents it does **not** run, on machines it does **not** control. So the central
+Kaambaan coordinates agents it does **not** run, on machines it does **not** control. So the central
 reliability problem is: *track an external, possibly-flaky process as a durable state machine, detect
 when it dies, reclaim its work safely, and pause indefinitely for humans without burning resources.*
 
@@ -117,7 +117,7 @@ Decisions:
 5. **Two-tier gates** ([11](./11-prior-art-and-market-scan.md)): a stage may be a *soft* review column
    (advisory) or a *hard* policy gate. **Action-level autonomy** (what an agent may do without asking —
    Factory's Off/Low/Medium/High + allow/deny/blocklist) lives in the agent **profile**
-   ([05 §7](./05-integration-surfaces.md)); a denied action surfaces to Kanbaan as an `elicitation`.
+   ([05 §7](./05-integration-surfaces.md)); a denied action surfaces to Kaambaan as an `elicitation`.
 
 ## 7. Failure & recovery taxonomy
 

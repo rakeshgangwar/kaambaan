@@ -1,0 +1,101 @@
+import { z } from 'zod';
+
+/**
+ * Canonical task states — mirrors the A2A `TaskState` machine (see docs/03-card-lifecycle.md).
+ * `canceled` is spelled with a single "l" to match A2A exactly.
+ */
+export const TaskState = z.enum([
+  'submitted',
+  'working',
+  'input-required',
+  'auth-required',
+  'completed',
+  'rejected',
+  'failed',
+  'canceled',
+]);
+export type TaskState = z.infer<typeof TaskState>;
+
+export const TERMINAL_STATES = ['completed', 'rejected', 'failed', 'canceled'] as const;
+export const INTERRUPTED_STATES = ['input-required', 'auth-required'] as const;
+export const ACTIVE_STATES = ['submitted', 'working'] as const;
+
+export function isTerminal(state: TaskState): boolean {
+  return (TERMINAL_STATES as readonly string[]).includes(state);
+}
+export function isInterrupted(state: TaskState): boolean {
+  return (INTERRUPTED_STATES as readonly string[]).includes(state);
+}
+
+/** Typed agent activities (see docs/04-agent-contract.md §4). `prompt` is human-authored. */
+export const ActivityType = z.enum([
+  'thought',
+  'action',
+  'response',
+  'elicitation',
+  'error',
+  'prompt',
+]);
+export type ActivityType = z.infer<typeof ActivityType>;
+
+/** Render/observability hint aligned with OpenInference/OTel span kinds (docs/07 §2). */
+export const ActivityKind = z.enum([
+  'AGENT',
+  'LLM',
+  'TOOL',
+  'THINKING',
+  'MESSAGE',
+  'CHAIN',
+  'RETRIEVER',
+  'GUARDRAIL',
+  'STAGE_TRANSITION',
+  'PIPELINE',
+]);
+export type ActivityKind = z.infer<typeof ActivityKind>;
+
+/** Typed overlay on an activity (docs/04 §4). Open enum, extended for gates. */
+export const Signal = z.enum(['stop', 'auth', 'select', 'approve', 'reject']);
+export type SignalType = z.infer<typeof Signal>;
+
+export const Role = z.enum(['owner', 'admin', 'member', 'viewer']);
+export type Role = z.infer<typeof Role>;
+
+export const StageGate = z.enum(['none', 'approval']);
+export type StageGate = z.infer<typeof StageGate>;
+
+export const StageOwnerKind = z.enum(['capability', 'agent', 'human']);
+export type StageOwnerKind = z.infer<typeof StageOwnerKind>;
+
+export const RunOutcome = z.enum([
+  'completed',
+  'blocked',
+  'rejected',
+  'crashed',
+  'timed_out',
+  'reclaimed',
+  'canceled',
+]);
+export type RunOutcome = z.infer<typeof RunOutcome>;
+
+export const AgentStatus = z.enum(['online', 'busy', 'offline']);
+export type AgentStatus = z.infer<typeof AgentStatus>;
+
+export const ConnectionType = z.enum(['mcp', 'rest', 'webhook', 'acp']);
+export type ConnectionType = z.infer<typeof ConnectionType>;
+
+export const ReferenceProvider = z.enum(['github', 'gitlab', 'docs', 'url']);
+export type ReferenceProvider = z.infer<typeof ReferenceProvider>;
+
+export const ReferenceSourceType = z.enum([
+  'issue',
+  'pull_request',
+  'repo',
+  'branch',
+  'commit',
+  'doc',
+  'url',
+]);
+export type ReferenceSourceType = z.infer<typeof ReferenceSourceType>;
+
+export const SyncState = z.enum(['synced', 'stale', 'error']);
+export type SyncState = z.infer<typeof SyncState>;

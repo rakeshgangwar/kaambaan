@@ -1,11 +1,11 @@
 # 01 — Domain Model & Glossary
 
-This document defines the **nouns** of Kanbaan and how they relate. Terminology here is
+This document defines the **nouns** of Kaambaan and how they relate. Terminology here is
 binding: code, APIs, and tests should use exactly these names.
 
 ## The three-level work hierarchy (read this first)
 
-The single most important distinction in Kanbaan is **Card vs Task vs Run**. Conflating them
+The single most important distinction in Kaambaan is **Card vs Task vs Run**. Conflating them
 is the most likely source of design bugs.
 
 - **Card** — the *durable unit of work* on the board (e.g. "Add OAuth login"). It persists for
@@ -105,7 +105,7 @@ source of truth agents read back from (never read mutable card fields mid-run).
 Optional typed metadata attached to an activity that tells the recipient how to interpret/
 render it. Initial set (Linear): `stop` (human→agent: halt now), `auth` (agent→human: link an
 account/credential), `select` (agent→human: choose from options — **this is how an approval
-gate renders Approve / Request changes / Reject**). Signals are an **open enum**; Kanbaan adds
+gate renders Approve / Request changes / Reject**). Signals are an **open enum**; Kaambaan adds
 `approve`/`reject` semantics on top of `select` as needed. Fields: `signal`, `signalMetadata`.
 
 ### Gate / Approval

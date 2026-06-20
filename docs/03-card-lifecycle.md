@@ -1,13 +1,13 @@
 # 03 — Card Lifecycle & Pipeline
 
-This is the heart of the system. Kanbaan's canonical state machine is the **A2A `TaskState`**
+This is the heart of the system. Kaambaan's canonical state machine is the **A2A `TaskState`**
 machine; the board's columns are a presentation on top of it, with **human approval gates**
 modeled as `input-required`. Reworking finished work creates a *new* task (A2A immutability),
 which gives us a free, complete audit history.
 
 ## Canonical states (A2A `TaskState`)
 
-| State | Kind | Meaning in Kanbaan |
+| State | Kind | Meaning in Kaambaan |
 |-------|------|--------------------|
 | `submitted` | active | Task created for a card+stage; not yet picked up by an agent |
 | `working` | active | An agent has claimed it and is executing |
@@ -58,7 +58,7 @@ Stage A (owner: research)        Stage B (gate: approval)      Stage C (owner: p
 2. An agent whose capabilities match Stage A's `owner` **claims** `A1` → `working`.
 3. The agent works, streaming activities, then calls **`complete`** with a **structured
    handoff** `metadata` payload → `A1` is `completed`.
-4. Kanbaan advances the card to Stage B. If Stage B is a **gate**, the card waits in **Review**
+4. Kaambaan advances the card to Stage B. If Stage B is a **gate**, the card waits in **Review**
    (a task in `input-required` + `select` signal). Otherwise a new Task is created for Stage B
    and becomes claimable.
 5. On approve, the card advances to Stage C's **Ready**; a new Task `C1` is created. The Stage
@@ -96,7 +96,7 @@ human gate is the baseline.
 
 There is a second, finer kind of approval — **action-level** approval (which shell commands /
 tools an agent may run). That lives on the *agent's* side (its harness's permission model) and
-is out of Kanbaan's scope, though an agent may surface it to us via an `elicitation` + signal.
+is out of Kaambaan's scope, though an agent may surface it to us via an `elicitation` + signal.
 
 ## Rework & immutability
 
