@@ -9,6 +9,8 @@
     DEFAULT_STAGES,
     type BoardSnapshot,
   } from '$lib/api';
+  import { Button } from '$lib/components/ui/button';
+  import { cardDraggable, columnDropTarget } from '$lib/dnd';
 
   const BOARD_KEY = 'kaambaan.boardId';
 
@@ -16,9 +18,9 @@
   let title = $state('');
   let error = $state<string | null>(null);
   let connected = $state(false);
+  let overStage = $state<string | null>(null);
 
   let boardId: string | null = null;
-  let dragCardId: string | null = null;
 
   async function refresh(): Promise<void> {
     if (!boardId) return;
@@ -69,10 +71,9 @@
     }
   }
 
-  async function onDropCard(stageKey: string): Promise<void> {
-    if (!boardId || !dragCardId) return;
-    const res = await moveCard(boardId, dragCardId, stageKey);
-    dragCardId = null;
+  async function onDropCard(stageKey: string, cardId: string): Promise<void> {
+    if (!boardId) return;
+    const res = await moveCard(boardId, cardId, stageKey);
     if (!res.ok) {
       const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
       error = body?.error?.message ?? `Move failed (${res.status})`;
@@ -87,52 +88,78 @@
   }
 </script>
 
-<main class="app">
+<main class="min-h-screen p-6">
   {#if !board}
-    <h1 class="brand">Kaambaan</h1>
-    <p class="muted">{error ?? 'Loading board…'}</p>
+    <h1 class="text-xl font-bold">Kaambaan</h1>
+    <p class="text-muted-foreground mt-2 text-sm">{error ?? 'Loading board…'}</p>
   {:else}
-    <header class="topbar">
-      <h1 class="brand">Kaambaan <span class="muted">/ {board.name}</span></h1>
-      <span class="dot {connected ? 'live' : 'off'}">{connected ? 'live' : 'offline'}</span>
+    <header class="flex items-center justify-between">
+      <h1 class="text-xl font-bold">
+        Kaambaan <span class="text-muted-foreground font-normal">/ {board.name}</span>
+      </h1>
+      <span
+        class="rounded-full border px-2 py-0.5 text-xs {connected
+          ? 'border-emerald-500/40 text-emerald-400'
+          : 'text-muted-foreground'}"
+      >
+        {connected ? '● live' : '○ offline'}
+      </span>
     </header>
 
-    <form class="composer" onsubmit={onAdd}>
-      <input bind:value={title} placeholder="New card title…" aria-label="New card title" />
-      <button type="submit">Add card</button>
+    <form class="mt-4 flex gap-2" onsubmit={onAdd}>
+      <input
+        bind:value={title}
+        placeholder="New card title…"
+        aria-label="New card title"
+        class="bg-card focus:ring-ring w-full max-w-sm rounded-md border px-3 py-2 text-sm outline-none focus:ring-2"
+      />
+      <Button type="submit">Add card</Button>
     </form>
 
     {#if error}
-      <p class="error" role="alert">{error}</p>
+      <p
+        role="alert"
+        class="border-destructive/40 bg-destructive/10 text-destructive-foreground mt-3 rounded-md border px-3 py-2 text-sm"
+      >
+        {error}
+      </p>
     {/if}
 
-    <div class="board">
+    <div class="mt-5 flex items-start gap-3 overflow-x-auto pb-4">
       {#each board.stages as stage (stage.key)}
         {@const cards = cardsIn(stage.key)}
         {@const overLimit = stage.wipLimit !== undefined && cards.length >= stage.wipLimit}
         <section
-          class="column"
-          role="list"
-          ondragover={(e) => e.preventDefault()}
-          ondrop={(e) => {
-            e.preventDefault();
-            void onDropCard(stage.key);
+          class="bg-card w-60 shrink-0 rounded-xl border p-2 transition-colors {overStage === stage.key
+            ? 'ring-primary ring-2'
+            : ''}"
+          use:columnDropTarget={{
+            stageKey: stage.key,
+            onDrop: (cardId) => onDropCard(stage.key, cardId),
+            onOver: (o) => (overStage = o ? stage.key : overStage === stage.key ? null : overStage),
           }}
         >
-          <div class="column-head">
-            <span class="column-name">{stage.name}</span>
-            <span class="count {overLimit ? 'full' : ''}">
+          <div class="flex items-center gap-2 px-1 pb-2">
+            <span class="text-sm font-semibold">{stage.name}</span>
+            <span
+              class="ml-auto rounded-full border px-1.5 text-xs {overLimit
+                ? 'text-destructive border-destructive/50'
+                : 'text-muted-foreground'}"
+            >
               {cards.length}{stage.wipLimit !== undefined ? ` / ${stage.wipLimit}` : ''}
             </span>
             {#if stage.gate === 'approval'}
-              <span class="gate" title="Approval gate">⛳</span>
+              <span title="Approval gate">⛳</span>
             {/if}
           </div>
-          <div class="cards">
+          <div class="flex min-h-10 flex-col gap-2">
             {#each cards as card (card.id)}
-              <article class="card" draggable="true" ondragstart={() => (dragCardId = card.id)}>
-                <div class="card-title">{card.title}</div>
-                <div class="card-meta">{card.ownerUserId}</div>
+              <article
+                use:cardDraggable={{ cardId: card.id }}
+                class="bg-background cursor-grab rounded-lg border p-2.5 transition-opacity active:cursor-grabbing"
+              >
+                <div class="text-sm leading-snug">{card.title}</div>
+                <div class="text-muted-foreground mt-1.5 text-xs">{card.ownerUserId}</div>
               </article>
             {/each}
           </div>
