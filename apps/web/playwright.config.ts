@@ -19,12 +19,13 @@ export default defineConfig({
   ],
   webServer: [
     {
-      // Migrate + seed the local D1 catalog before booting (board create now writes to it, and the
-      // dev workspace tnt_dev must exist to satisfy the catalog's foreign keys).
-      command: 'pnpm --filter @kaambaan/api dev:setup && pnpm --filter @kaambaan/api dev',
+      // Build the web first so wrangler dev's assets.directory (apps/web/build) exists, then migrate
+      // + seed the local D1 catalog (board create writes to it; tnt_dev must exist for the FKs). The
+      // tests still hit the Vite server on :5173 — the build only satisfies the Worker's assets check.
+      command: 'pnpm --filter @kaambaan/web build && pnpm --filter @kaambaan/api dev:setup && pnpm --filter @kaambaan/api dev',
       url: 'http://localhost:8787/health',
       reuseExistingServer: !process.env.CI,
-      timeout: 120_000,
+      timeout: 180_000,
     },
     {
       command: 'pnpm --filter @kaambaan/web dev',
