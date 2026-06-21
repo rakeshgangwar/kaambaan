@@ -5,6 +5,9 @@
     getBoard,
     getBoards,
     createCard,
+    updateCard,
+    deleteCard,
+    addReference,
     moveCard,
     resolveGate,
     openBoardSocket,
@@ -80,6 +83,14 @@
   let cardEstimate = $state<Estimate | null>(null);
   let gateComment = $state('');
 
+  // card edit
+  let editing = $state(false);
+  let editTitle = $state('');
+  let editPriority = $state(0);
+  let editDesc = $state('');
+  let savingCard = $state(false);
+  let newRefUrl = $state('');
+
   let boardId = $state<string | null>(null);
 
   async function refresh(): Promise<void> {
@@ -113,6 +124,53 @@
     cardDetail = null;
     drawerAttempts = [];
     cardEstimate = null;
+    editing = false;
+    newRefUrl = '';
+  }
+
+  function startEdit(): void {
+    if (!openCard) return;
+    editTitle = openCard.title;
+    editPriority = openCard.priority;
+    editDesc = (openCard.spec?.description as string | undefined) ?? '';
+    editing = true;
+  }
+
+  async function saveCard(): Promise<void> {
+    if (!boardId || !openCardId || editTitle.trim() === '') return;
+    savingCard = true;
+    try {
+      const spec = { ...(openCard?.spec ?? {}), description: editDesc };
+      const res = await updateCard(boardId, openCardId, { title: editTitle.trim(), priority: Number(editPriority) || 0, spec });
+      if (!res.ok) error = `Couldn't save the card (${res.status})`;
+      editing = false;
+      await refresh();
+    } finally {
+      savingCard = false;
+    }
+  }
+
+  async function onDeleteCard(): Promise<void> {
+    if (!boardId || !openCardId) return;
+    if (!confirm('Delete this card and its history? This cannot be undone.')) return;
+    const res = await deleteCard(boardId, openCardId);
+    if (res.ok) {
+      closeDrawer();
+      await refresh();
+    } else {
+      error = `Couldn't delete the card (${res.status})`;
+    }
+  }
+
+  async function addRef(): Promise<void> {
+    if (!boardId || !openCardId || newRefUrl.trim() === '') return;
+    const res = await addReference(boardId, openCardId, { url: newRefUrl.trim() });
+    if (res.ok) {
+      newRefUrl = '';
+      await refresh();
+    } else {
+      error = `Couldn't add that link (${res.status})`;
+    }
   }
 
   async function refreshDrawer(): Promise<void> {
@@ -758,28 +816,57 @@
       <button class="absolute inset-0 bg-black/55" onclick={closeDrawer} aria-label="Close drawer" tabindex="-1"></button>
       <aside class="bg-surface border-border drawer-in relative flex h-full w-full max-w-[460px] flex-col border-l shadow-2xl">
         <div class="border-border flex items-start justify-between gap-3 border-b p-4">
-          <div class="min-w-0">
-            <div class="eyebrow mb-1.5">{stageName} · {openCard.state}</div>
-            <h2 class="wordmark text-base leading-snug">{openCard.title}</h2>
-            <div class="text-muted-foreground mono mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px]">
-              <span>{openCard.ownerUserId}</span>
-              {#if openCard.costUsd > 0}<span class={openCard.overBudget ? 'text-coral' : ''}>{fmtUsd(openCard.costUsd)}</span>{/if}
-              {#if cardEstimate && cardEstimate.estimatedUsd !== null}
-                <span title="Estimated cost for this stage, from {cardEstimate.sampleSize} similar run{cardEstimate.sampleSize === 1 ? '' : 's'}">~{fmtUsd(cardEstimate.estimatedUsd)} est</span>
-              {/if}
-              {#if openCard.state === 'working'}<span class="inline-flex items-center gap-1.5"><span class="live-dot"></span><span style="color:var(--live)">working</span></span>{/if}
+          {#if editing}
+            <div class="min-w-0 flex-1">
+              <div class="eyebrow mb-2">edit card</div>
+              <input bind:value={editTitle} placeholder="Title" class="bg-inset border-border focus:border-marigold w-full rounded-[6px] border px-2.5 py-1.5 text-sm outline-none" />
+              <label class="text-muted-foreground mono mt-2 flex items-center gap-1.5 text-[11px]">
+                priority
+                <input type="number" bind:value={editPriority} class="bg-inset border-border focus:border-marigold w-16 rounded-[5px] border px-1.5 py-1 outline-none" />
+              </label>
+              <textarea bind:value={editDesc} rows="3" placeholder="Description / brief for the agent…" class="bg-inset border-border focus:border-marigold mt-2 w-full resize-none rounded-[6px] border px-2.5 py-2 text-xs outline-none"></textarea>
+              <div class="mt-2.5 flex gap-1.5">
+                <Button size="sm" onclick={saveCard} disabled={savingCard || editTitle.trim() === ''}>{savingCard ? 'Saving…' : 'Save'}</Button>
+                <Button size="sm" variant="ghost" onclick={() => (editing = false)}>Cancel</Button>
+              </div>
             </div>
-          </div>
-          <button onclick={closeDrawer} class="text-muted-foreground hover:text-foreground hover:bg-accent shrink-0 rounded-[7px] p-1.5" aria-label="Close">
-            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-          </button>
+          {:else}
+            <div class="min-w-0">
+              <div class="eyebrow mb-1.5">{stageName} · {openCard.state}{#if openCard.priority > 0} · P{openCard.priority}{/if}</div>
+              <h2 class="wordmark text-base leading-snug">{openCard.title}</h2>
+              <div class="text-muted-foreground mono mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px]">
+                <span>{openCard.ownerUserId}</span>
+                {#if openCard.costUsd > 0}<span class={openCard.overBudget ? 'text-coral' : ''}>{fmtUsd(openCard.costUsd)}</span>{/if}
+                {#if cardEstimate && cardEstimate.estimatedUsd !== null}
+                  <span title="Estimated cost for this stage, from {cardEstimate.sampleSize} similar run{cardEstimate.sampleSize === 1 ? '' : 's'}">~{fmtUsd(cardEstimate.estimatedUsd)} est</span>
+                {/if}
+                {#if openCard.state === 'working'}<span class="inline-flex items-center gap-1.5"><span class="live-dot"></span><span style="color:var(--live)">working</span></span>{/if}
+              </div>
+            </div>
+            <div class="flex shrink-0 items-center gap-1">
+              <button onclick={startEdit} aria-label="Edit card" title="Edit card" class="text-muted-foreground hover:text-foreground hover:bg-accent rounded-[7px] p-1.5">
+                <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+              </button>
+              <button onclick={closeDrawer} class="text-muted-foreground hover:text-foreground hover:bg-accent rounded-[7px] p-1.5" aria-label="Close">
+                <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
+            </div>
+          {/if}
         </div>
 
         <div class="flex-1 space-y-6 overflow-y-auto p-4">
-          {#if refsFor(openCard.id).length > 0}
+          {#if openCard.spec?.description}
+            {@const desc = String(openCard.spec?.description ?? '')}
             <section>
-              <div class="eyebrow mb-2">references</div>
-              <div class="flex flex-wrap gap-1.5">
+              <div class="eyebrow mb-2">description</div>
+              <p class="text-foreground/90 text-sm leading-relaxed whitespace-pre-wrap">{desc}</p>
+            </section>
+          {/if}
+
+          <section>
+            <div class="eyebrow mb-2">references</div>
+            {#if refsFor(openCard.id).length > 0}
+              <div class="mb-2.5 flex flex-wrap gap-1.5">
                 {#each refsFor(openCard.id) as ref (ref.id)}
                   {@const href = safeHref(ref.url)}
                   {@const inner = `${refLabel(ref)}${subStateLabel(ref) ? ` · ${subStateLabel(ref)}` : ''}`}
@@ -790,8 +877,19 @@
                   {/if}
                 {/each}
               </div>
-            </section>
-          {/if}
+            {/if}
+            <div class="flex gap-1.5">
+              <input
+                bind:value={newRefUrl}
+                placeholder="https://… attach a link"
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') addRef();
+                }}
+                class="bg-inset border-border focus:border-marigold flex-1 rounded-[6px] border px-2.5 py-1.5 text-xs outline-none"
+              />
+              <Button size="sm" variant="outline" onclick={addRef} disabled={newRefUrl.trim() === ''}>Add</Button>
+            </div>
+          </section>
 
           {#if cardDetail?.handoff}
             <section>
@@ -841,6 +939,10 @@
               </ol>
             {/if}
           </section>
+
+          <div class="border-border/60 border-t pt-4">
+            <button onclick={onDeleteCard} class="text-muted-foreground hover:text-coral text-xs">Delete card</button>
+          </div>
         </div>
 
         {#if openCardGate}

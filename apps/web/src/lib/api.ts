@@ -38,6 +38,7 @@ export interface Stage {
 export interface Card {
   id: string;
   title: string;
+  spec?: Record<string, unknown> | null;
   ownerUserId: string;
   currentStageKey: string;
   state: string;
@@ -187,6 +188,21 @@ export async function createCard(boardId: string, title: string): Promise<void> 
     body: JSON.stringify({ title }), // owner is the signed-in user, set by the server
   });
   if (!res.ok) throw new Error(`createCard failed (${res.status})`);
+}
+
+/** Edit a card's title / description (spec) / priority. */
+export function updateCard(boardId: string, cardId: string, patch: { title?: string; spec?: Record<string, unknown>; priority?: number }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/cards/${cardId}`, { method: 'PATCH', headers, body: JSON.stringify(patch) });
+}
+
+/** Delete a card and everything scoped to it. */
+export function deleteCard(boardId: string, cardId: string): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/cards/${cardId}`, { method: 'DELETE', headers });
+}
+
+/** Attach a reference (link) to a card by hand. */
+export function addReference(boardId: string, cardId: string, ref: { url: string; title?: string }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/cards/${cardId}/references`, { method: 'PUT', headers, body: JSON.stringify({ ...ref, addedBy: 'user' }) });
 }
 
 /** Returns the raw response so callers can surface WIP-limit (409) and unknown-stage (400) cases. */

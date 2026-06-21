@@ -189,6 +189,20 @@ export default {
         return Response.json({ card: result.value });
       }
 
+      // PATCH /v1/boards/:id/cards/:cardId — edit a card · DELETE — remove it
+      const cardMatch = rest.match(/^cards\/([^/]+)$/);
+      if (cardMatch && request.method === 'PATCH') {
+        const body = (await request.json()) as { title?: string; spec?: JsonValue; priority?: number };
+        const result = await stub.updateCard(cardMatch[1]!, body);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json({ card: result.value });
+      }
+      if (cardMatch && request.method === 'DELETE') {
+        const result = await stub.deleteCard(cardMatch[1]!);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return new Response(null, { status: 204 });
+      }
+
       // PUT /v1/boards/:id/cards/:cardId/references — idempotent reference upsert (docs/06 §1)
       const refMatch = rest.match(/^cards\/([^/]+)\/references$/);
       if (refMatch && request.method === 'PUT') {
