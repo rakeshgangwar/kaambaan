@@ -397,8 +397,61 @@
     await refresh();
   }
 
+  // views + filters (Linear-style) ---------------------------------------
+  type CardFilters = { states: string[]; owners: string[]; minPriority: number | null; needsReview: boolean; live: boolean; overBudget: boolean };
+  let view = $state<'board' | 'list'>('board');
+  let listGroupBy = $state<'stage' | 'state' | 'owner' | 'priority'>('stage');
+  let showFilterMenu = $state(false);
+  let filters = $state<CardFilters>({ states: [], owners: [], minPriority: null, needsReview: false, live: false, overBudget: false });
+
+  const boardStates = $derived(board ? [...new Set(board.cards.map((c) => c.state))].sort() : []);
+  const boardOwners = $derived(board ? [...new Set(board.cards.map((c) => c.ownerUserId))].sort() : []);
+
+  const filteredCards = $derived(
+    !board
+      ? []
+      : board.cards.filter((c) => {
+          if (filters.states.length && !filters.states.includes(c.state)) return false;
+          if (filters.owners.length && !filters.owners.includes(c.ownerUserId)) return false;
+          if (filters.minPriority !== null && c.priority < filters.minPriority) return false;
+          if (filters.needsReview && !board!.gates.some((g) => g.cardId === c.id)) return false;
+          if (filters.live && c.state !== 'working') return false;
+          if (filters.overBudget && !c.overBudget) return false;
+          return true;
+        }),
+  );
+
+  const activeFilterCount = $derived(
+    filters.states.length + filters.owners.length + (filters.minPriority !== null ? 1 : 0) + (filters.needsReview ? 1 : 0) + (filters.live ? 1 : 0) + (filters.overBudget ? 1 : 0),
+  );
+
+  const listGroups = $derived.by(() => {
+    if (!board) return [] as Array<{ key: string; label: string; cards: BoardSnapshot['cards'] }>;
+    const cards = filteredCards;
+    let groups: Array<{ key: string; label: string; cards: BoardSnapshot['cards'] }>;
+    if (listGroupBy === 'stage') {
+      groups = board.stages.map((s) => ({ key: s.key, label: s.name, cards: cards.filter((c) => c.currentStageKey === s.key) }));
+    } else {
+      const keyOf = (c: BoardSnapshot['cards'][number]) => (listGroupBy === 'state' ? c.state : listGroupBy === 'owner' ? c.ownerUserId : `P${c.priority}`);
+      const keys = [...new Set(cards.map(keyOf))].sort();
+      groups = keys.map((k) => ({ key: k, label: k, cards: cards.filter((c) => keyOf(c) === k) }));
+    }
+    return groups.filter((g) => g.cards.length > 0);
+  });
+
+  function toggleIn(list: string[], value: string): string[] {
+    return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+  }
+  function clearFilters(): void {
+    filters = { states: [], owners: [], minPriority: null, needsReview: false, live: false, overBudget: false };
+  }
+
   function cardsIn(stageKey: string): BoardSnapshot['cards'] {
-    return board ? board.cards.filter((c) => c.currentStageKey === stageKey) : [];
+    return filteredCards.filter((c) => c.currentStageKey === stageKey);
+  }
+
+  function stageLabel(key: string): string {
+    return board?.stages.find((s) => s.key === key)?.name ?? key;
   }
 
   function gateFor(cardId: string): BoardSnapshot['gates'][number] | undefined {
@@ -467,6 +520,7 @@
       showNewBoard = false;
       showBudget = false;
       showSettings = false;
+      showFilterMenu = false;
     }
   }}
 />
@@ -714,8 +768,71 @@
       </p>
     {/if}
 
+    <!-- view + filter toolbar (Linear-style) -->
+    <div class="mt-5 flex flex-wrap items-center gap-2">
+      <div class="border-border inline-flex overflow-hidden rounded-[7px] border text-xs">
+        <button onclick={() => (view = 'board')} class="mono px-2.5 py-1.5 {view === 'board' ? 'bg-marigold text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}">Board</button>
+        <button onclick={() => (view = 'list')} class="mono border-border border-l px-2.5 py-1.5 {view === 'list' ? 'bg-marigold text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}">List</button>
+      </div>
+
+      <div class="relative">
+        <button onclick={() => (showFilterMenu = !showFilterMenu)} class="border-border hover:border-marigold/50 mono inline-flex items-center gap-1.5 rounded-[7px] border px-2.5 py-1.5 text-xs">
+          <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+          Filter{#if activeFilterCount > 0}<span style="color:var(--marigold)"> · {activeFilterCount}</span>{/if}
+        </button>
+        {#if showFilterMenu}
+          <div class="bg-card border-border absolute left-0 z-30 mt-2 w-64 rounded-[10px] border p-2 shadow-2xl max-sm:fixed max-sm:inset-x-4 max-sm:top-16 max-sm:mt-0 max-sm:w-auto">
+            {#if boardStates.length > 0}
+              <div class="eyebrow px-1.5 py-1">state</div>
+              {#each boardStates as s (s)}
+                <button onclick={() => (filters.states = toggleIn(filters.states, s))} class="hover:bg-muted flex w-full items-center gap-2 rounded-[6px] px-1.5 py-1 text-left text-xs">
+                  <span class="size-3 rounded-[3px] border {filters.states.includes(s) ? 'border-marigold bg-marigold' : 'border-border'}"></span>{s}
+                </button>
+              {/each}
+            {/if}
+            {#if boardOwners.length > 0}
+              <div class="eyebrow mt-1.5 px-1.5 py-1">owner</div>
+              {#each boardOwners as o (o)}
+                <button onclick={() => (filters.owners = toggleIn(filters.owners, o))} class="hover:bg-muted flex w-full items-center gap-2 rounded-[6px] px-1.5 py-1 text-left text-xs">
+                  <span class="size-3 rounded-[3px] border {filters.owners.includes(o) ? 'border-marigold bg-marigold' : 'border-border'}"></span><span class="truncate">{o}</span>
+                </button>
+              {/each}
+            {/if}
+            <label class="text-muted-foreground mt-2 flex items-center justify-between gap-2 px-1.5 text-xs">
+              min priority
+              <input type="number" min="0" bind:value={filters.minPriority} placeholder="any" class="bg-inset border-border focus:border-marigold mono w-16 rounded-[5px] border px-1.5 py-0.5 text-[11px] outline-none" />
+            </label>
+            <div class="border-border mt-2 space-y-0.5 border-t pt-1.5">
+              <button onclick={() => (filters.needsReview = !filters.needsReview)} class="hover:bg-muted flex w-full items-center gap-2 rounded-[6px] px-1.5 py-1 text-left text-xs"><span class="size-3 rounded-[3px] border {filters.needsReview ? 'border-coral bg-coral' : 'border-border'}"></span>needs review</button>
+              <button onclick={() => (filters.live = !filters.live)} class="hover:bg-muted flex w-full items-center gap-2 rounded-[6px] px-1.5 py-1 text-left text-xs"><span class="size-3 rounded-[3px] border {filters.live ? 'border-marigold bg-marigold' : 'border-border'}"></span>live (working)</button>
+              <button onclick={() => (filters.overBudget = !filters.overBudget)} class="hover:bg-muted flex w-full items-center gap-2 rounded-[6px] px-1.5 py-1 text-left text-xs"><span class="size-3 rounded-[3px] border {filters.overBudget ? 'border-coral bg-coral' : 'border-border'}"></span>over budget</button>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- active filter chips -->
+      {#each filters.states as s (s)}<button onclick={() => (filters.states = toggleIn(filters.states, s))} class="bg-inset border-border mono rounded-[6px] border px-2 py-1 text-[11px]">state: {s} ×</button>{/each}
+      {#each filters.owners as o (o)}<button onclick={() => (filters.owners = toggleIn(filters.owners, o))} class="bg-inset border-border mono rounded-[6px] border px-2 py-1 text-[11px]">owner: {o} ×</button>{/each}
+      {#if filters.minPriority !== null}<button onclick={() => (filters.minPriority = null)} class="bg-inset border-border mono rounded-[6px] border px-2 py-1 text-[11px]">≥ P{filters.minPriority} ×</button>{/if}
+      {#if filters.needsReview}<button onclick={() => (filters.needsReview = false)} class="bg-inset border-coral/50 text-coral mono rounded-[6px] border px-2 py-1 text-[11px]">needs review ×</button>{/if}
+      {#if filters.live}<button onclick={() => (filters.live = false)} class="bg-inset border-border mono rounded-[6px] border px-2 py-1 text-[11px]">live ×</button>{/if}
+      {#if filters.overBudget}<button onclick={() => (filters.overBudget = false)} class="bg-inset border-coral/50 text-coral mono rounded-[6px] border px-2 py-1 text-[11px]">over budget ×</button>{/if}
+      {#if activeFilterCount > 0}<button onclick={clearFilters} class="text-muted-foreground hover:text-foreground text-xs">clear</button>{/if}
+
+      {#if view === 'list'}
+        <div class="text-muted-foreground ml-auto flex items-center gap-1.5">
+          <span class="eyebrow">group</span>
+          {#each ['stage', 'state', 'owner', 'priority'] as g (g)}
+            <button onclick={() => (listGroupBy = g as typeof listGroupBy)} class="mono rounded-[5px] px-1.5 py-0.5 text-[11px] {listGroupBy === g ? 'text-marigold' : 'text-muted-foreground hover:text-foreground'}">{g}</button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    {#if view === 'board'}
     <!-- the directed flight path: stages are waypoints, work flows → -->
-    <div class="mt-6 flex items-start overflow-x-auto pb-6">
+    <div class="mt-4 flex items-start overflow-x-auto pb-6">
       {#each board.stages as stage, i (stage.key)}
         {@const cards = cardsIn(stage.key)}
         {@const overLimit = stage.wipLimit !== undefined && cards.length >= stage.wipLimit}
@@ -814,6 +931,40 @@
         </section>
       {/each}
     </div>
+    {:else}
+      <!-- list view (Linear-style, grouped) -->
+      <div class="mt-4 pb-10">
+        {#if listGroups.length === 0}
+          <p class="text-muted-foreground mono py-16 text-center text-sm">No cards match these filters.</p>
+        {:else}
+          {#each listGroups as group (group.key)}
+            <div class="mb-5">
+              <div class="border-border/60 mb-1 flex items-center gap-2 border-b pb-1.5">
+                <span class="wordmark text-[13px] tracking-wide">{group.label}</span>
+                <span class="mono text-muted-foreground text-xs">{group.cards.length}</span>
+              </div>
+              {#each group.cards as card (card.id)}
+                {@const gate = gateFor(card.id)}
+                <button
+                  onclick={() => openDrawer(card.id)}
+                  class="border-border/40 hover:bg-inset/60 flex w-full items-center gap-3 border-b py-2.5 pr-1 pl-2 text-left {gate ? 'tile-gate' : ''}"
+                >
+                  <span class="mono text-muted-foreground w-7 shrink-0 text-[11px]">{card.priority > 0 ? `P${card.priority}` : ''}</span>
+                  <span class="flex-1 truncate text-sm">{card.title}</span>
+                  {#if card.state === 'working'}<span class="live-dot shrink-0" title="Agent working"></span>{/if}
+                  {#if gate}<span class="eyebrow text-coral shrink-0">review</span>{/if}
+                  {#if refsFor(card.id).length > 0}<span class="mono hidden shrink-0 text-[10px] sm:inline" style="color:var(--marigold)">↗{refsFor(card.id).length}</span>{/if}
+                  {#if listGroupBy !== 'state'}<span class="mono text-muted-foreground hidden w-20 shrink-0 truncate text-right text-[11px] md:block">{card.state}</span>{/if}
+                  <span class="mono text-muted-foreground hidden w-24 shrink-0 truncate text-[11px] sm:block">{card.ownerUserId}</span>
+                  {#if listGroupBy !== 'stage'}<span class="border-border mono hidden shrink-0 rounded-[5px] border px-1.5 py-0.5 text-[10px] lg:inline">{stageLabel(card.currentStageKey)}</span>{/if}
+                  <span class="mono w-14 shrink-0 text-right text-[11px] {card.overBudget ? 'text-coral' : 'text-muted-foreground'}">{card.costUsd > 0 ? fmtUsd(card.costUsd) : ''}</span>
+                </button>
+              {/each}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {/if}
   {/if}
 
   <!-- card drawer: session replay (docs/07 §4) -->
