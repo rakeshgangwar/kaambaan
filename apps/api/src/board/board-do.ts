@@ -866,7 +866,12 @@ export class BoardDO extends DurableObject<Env> {
 
     let payload: unknown;
     try {
-      payload = JSON.parse(input.rawBody);
+      // Accept both webhook content types. GitHub's default (application/x-www-form-urlencoded) sends
+      // `payload=<url-encoded json>`; application/json sends the raw JSON. The signature was already
+      // verified over the raw body above, so unwrapping the form encoding here is safe.
+      const raw = input.rawBody;
+      const jsonText = raw.startsWith('payload=') ? (new URLSearchParams(raw).get('payload') ?? raw) : raw;
+      payload = JSON.parse(jsonText);
     } catch {
       return { ok: true, value: { deduped: false, matched: 0, modeled: false } };
     }
