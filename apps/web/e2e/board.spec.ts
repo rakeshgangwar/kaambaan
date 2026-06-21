@@ -1,10 +1,24 @@
 import { test, expect } from '@playwright/test';
 
 const BOARD_KEY = 'kaambaan.boardId';
+const API = 'http://localhost:8787';
+// The app talks to the API as the dev workspace (tnt_dev) when the server runs with DEV_AUTH on.
+const TENANT = { 'X-Tenant-Id': 'tnt_dev', 'Content-Type': 'application/json' };
+const DEFAULT_STAGES = [
+  { key: 'backlog', name: 'Backlog', order: 0 },
+  { key: 'ready', name: 'Ready', order: 1 },
+  { key: 'in-progress', name: 'In Progress', order: 2, wipLimit: 3 },
+  { key: 'review', name: 'Review', order: 3, gate: 'approval' },
+  { key: 'done', name: 'Done', order: 4 },
+];
 
-// Each test starts from a fresh board (the app creates one when localStorage is empty).
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript((key) => window.localStorage.removeItem(key), BOARD_KEY);
+// Each test gets its own fresh board (created via the API) and points the app at it, so tests are
+// isolated and don't depend on the onboarding/auto-pick path.
+let boardId: string;
+test.beforeEach(async ({ page, request }) => {
+  const res = await request.post(`${API}/v1/boards`, { headers: TENANT, data: { name: 'E2E board', stages: DEFAULT_STAGES } });
+  boardId = (await res.json()).boardId as string;
+  await page.addInitScript(([key, id]) => window.localStorage.setItem(key, id), [BOARD_KEY, boardId]);
 });
 
 test('renders the pipeline columns and connects live', async ({ page }) => {
@@ -38,19 +52,13 @@ test('moves a card to another column via drag', async ({ page }) => {
 
 test('streams a new card to a second client in real time', async ({ browser }) => {
   const a = await browser.newPage();
-  await a.addInitScript((key) => window.localStorage.removeItem(key), BOARD_KEY);
+  await a.addInitScript(([key, id]) => window.localStorage.setItem(key, id), [BOARD_KEY, boardId]);
   await a.goto('/');
   await expect(a.getByText('Backlog', { exact: true })).toBeVisible();
 
-  const boardId = await a.evaluate((key) => window.localStorage.getItem(key), BOARD_KEY);
-  expect(boardId).toBeTruthy();
-
   // Second client opens the SAME board, then subscribes to its live feed.
   const b = await browser.newPage();
-  await b.addInitScript(
-    ([key, id]) => window.localStorage.setItem(key, id),
-    [BOARD_KEY, boardId as string] as const,
-  );
+  await b.addInitScript(([key, id]) => window.localStorage.setItem(key, id), [BOARD_KEY, boardId]);
   await b.goto('/');
   await expect(b.getByText('Backlog', { exact: true })).toBeVisible();
 

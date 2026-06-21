@@ -88,7 +88,7 @@ describe('gate REST surface', () => {
     expect(res.status).toBe(403);
   });
 
-  it('requires a resolver identity', async () => {
+  it('rejects an unauthenticated gate resolve (identity comes from auth, not a header)', async () => {
     const boardId = await createBoard(REVIEW_PIPELINE);
     await addCard(boardId);
     const c = await claim(boardId, 'agt_r', 'research');
@@ -98,12 +98,13 @@ describe('gate REST surface', () => {
       body: JSON.stringify({ leaseEpoch: c.leaseEpoch }),
     });
     const gateId = await gateIdOf(boardId);
+    // No auth at all (no session, no dev tenant header) → 401.
     const res = await SELF.fetch(`https://api.test/v1/boards/${boardId}/gates/${gateId}/resolve`, {
       method: 'POST',
-      headers: headers(),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decision: 'approve' }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(401);
   });
 
   it('submits a gated agent stage for review via REST', async () => {

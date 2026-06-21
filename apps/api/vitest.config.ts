@@ -7,5 +7,6 @@ export default defineConfig({
   plugins: [cloudflareTest({ wrangler: { configPath: './wrangler.jsonc' } })],
   test: {
     include: ['test/**/*.test.ts'],
+    setupFiles: ['./test/setup.ts'],
   },
 });

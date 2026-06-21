@@ -9,8 +9,26 @@
  * `resolveBearer` changes when it lands.
  */
 import type { McpAuth } from './tools';
+import type { Env } from '../env';
+import { hashToken } from '../auth/agent-token';
+import { findAgentByTokenHash } from '../db/catalog';
 
 const PROTECTED_RESOURCE_PATH = '/.well-known/oauth-protected-resource';
+
+/**
+ * Resolve the MCP caller: a real `kbn_` agent token (looked up in the catalog) takes precedence; the
+ * dev `<tenant>:<agent>:<caps>` bearer is accepted only when DEV_AUTH is on (local + tests).
+ */
+export async function resolveMcpAuth(request: Request, env: Env): Promise<McpAuth | null> {
+  const match = (request.headers.get('Authorization') ?? '').match(/^Bearer\s+(.+)$/i);
+  const token = match ? match[1]!.trim() : null;
+  if (token && token.startsWith('kbn_')) {
+    const found = await findAgentByTokenHash(env.DB, await hashToken(token));
+    return found ? { tenantId: found.tenantId, agentId: found.agentId, capabilities: found.capabilities } : null;
+  }
+  if (env.DEV_AUTH === 'true') return resolveBearer(request);
+  return null;
+}
 
 /** Parse the dev bearer into a principal, or null if absent/malformed. */
 export function resolveBearer(request: Request): McpAuth | null {

@@ -1,9 +1,28 @@
 /**
- * Thin client for the Kaambaan API (apps/api). P1 uses a dev-mode tenant; real auth replaces it
- * later without changing call sites.
+ * Thin client for the Kaambaan API (apps/api). The deployed app authenticates with a session cookie
+ * (sent automatically, same-origin); the `X-Tenant-Id` header is a no-op there and only enables the
+ * local dev workspace (when the server runs with DEV_AUTH on).
  */
 const TENANT = 'tnt_dev';
 const headers = { 'X-Tenant-Id': TENANT, 'Content-Type': 'application/json' };
+
+export interface User {
+  userId: string;
+  tenantId: string;
+  name?: string;
+  login?: string;
+  avatarUrl?: string;
+}
+
+export interface BoardSummary {
+  id: string;
+  name: string;
+}
+
+export interface AgentToken {
+  agent: { id: string; name: string; capabilities: string[] };
+  token: string;
+}
 
 export interface Stage {
   key: string;
@@ -137,7 +156,7 @@ export async function createCard(boardId: string, title: string): Promise<void> 
   const res = await fetch(`/v1/boards/${boardId}/cards`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ title, ownerUserId: 'usr_dev' }),
+    body: JSON.stringify({ title }), // owner is the signed-in user, set by the server
   });
   if (!res.ok) throw new Error(`createCard failed (${res.status})`);
 }
@@ -176,7 +195,7 @@ export function markNotificationRead(boardId: string, seq: number): Promise<Resp
   return fetch(`/v1/boards/${boardId}/notifications/${seq}/read`, { method: 'POST', headers });
 }
 
-/** Resolve an approval gate. The dev resolver is `usr_dev`; real auth supplies the user. */
+/** Resolve an approval gate. The resolver identity is the signed-in user (set by the server). */
 export function resolveGate(
   boardId: string,
   gateId: string,
@@ -185,9 +204,34 @@ export function resolveGate(
 ): Promise<Response> {
   return fetch(`/v1/boards/${boardId}/gates/${gateId}/resolve`, {
     method: 'POST',
-    headers: { ...headers, 'X-User-Id': 'usr_dev' },
+    headers,
     body: JSON.stringify({ decision, comment }),
   });
+}
+
+/** The signed-in user, or null when signed out (drives the auth gate). */
+export async function getMe(): Promise<User | null> {
+  const res = await fetch('/auth/me', { headers });
+  if (!res.ok) return null;
+  return ((await res.json()) as { user: User | null }).user;
+}
+
+export async function logout(): Promise<void> {
+  await fetch('/auth/logout', { method: 'POST', headers });
+}
+
+/** The boards in the signed-in user's workspace. */
+export async function getBoards(): Promise<BoardSummary[]> {
+  const res = await fetch('/v1/boards', { headers });
+  if (!res.ok) throw new Error(`getBoards failed (${res.status})`);
+  return ((await res.json()) as { boards: BoardSummary[] }).boards;
+}
+
+/** Register an agent and mint its bearer token (shown once). */
+export async function createAgent(name: string, capabilities: string[]): Promise<AgentToken> {
+  const res = await fetch('/v1/agents', { method: 'POST', headers, body: JSON.stringify({ name, capabilities }) });
+  if (!res.ok) throw new Error(`createAgent failed (${res.status})`);
+  return (await res.json()) as AgentToken;
 }
 
 /** Subscribe to the board's live event feed; `onEvent` fires on every server message. */

@@ -1,4 +1,116 @@
 import { tenantScopedSelect, type ScopedQuery } from './tenant-scope';
+import { newId } from '../ids';
+import { generateAgentToken, hashToken } from '../auth/agent-token';
+
+/** The catalog is the cross-board system of record (docs/02): users, workspaces, agents, tokens. */
+export interface UserRecord {
+  id: string;
+  email: string;
+  name: string | null;
+}
+export interface TenantRecord {
+  id: string;
+  slug: string;
+  name: string;
+}
+export interface AgentRecord {
+  id: string;
+  tenantId: string;
+  name: string;
+  capabilities: string[];
+}
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'workspace';
+}
+
+/** Create or update a user by email (the GitHub-login upsert). */
+export async function upsertUserByEmail(db: D1Database, input: { email: string; name?: string | null }): Promise<UserRecord> {
+  const existing = await db.prepare(`SELECT id, email, name FROM users WHERE email = ?`).bind(input.email).first<UserRecord>();
+  if (existing) {
+    if (input.name && input.name !== existing.name) {
+      await db.prepare(`UPDATE users SET name = ?, updated_at = datetime('now') WHERE id = ?`).bind(input.name, existing.id).run();
+    }
+    return { ...existing, name: input.name ?? existing.name };
+  }
+  const id = newId('usr');
+  await db.prepare(`INSERT INTO users (id, email, name) VALUES (?, ?, ?)`).bind(id, input.email, input.name ?? null).run();
+  return { id, email: input.email, name: input.name ?? null };
+}
+
+/** The user's primary workspace, creating a personal one (owner) on first sign-in (docs/05 §7). */
+export async function ensurePersonalWorkspace(db: D1Database, userId: string, displayName: string): Promise<TenantRecord> {
+  const existing = await primaryTenant(db, userId);
+  if (existing) return existing;
+  const id = newId('tnt');
+  const tenant: TenantRecord = { id, slug: `${slugify(displayName)}-${id.slice(-6)}`, name: `${displayName}'s workspace` };
+  await db.prepare(`INSERT INTO tenants (id, slug, name) VALUES (?, ?, ?)`).bind(tenant.id, tenant.slug, tenant.name).run();
+  await db.prepare(`INSERT INTO memberships (id, tenant_id, user_id, role) VALUES (?, ?, ?, 'owner')`).bind(newId('mbr'), id, userId).run();
+  return tenant;
+}
+
+export async function primaryTenant(db: D1Database, userId: string): Promise<TenantRecord | null> {
+  return db
+    .prepare(`SELECT t.id, t.slug, t.name FROM tenants t JOIN memberships m ON m.tenant_id = t.id WHERE m.user_id = ? ORDER BY m.created_at ASC LIMIT 1`)
+    .bind(userId)
+    .first<TenantRecord>();
+}
+
+export async function createAgent(db: D1Database, tenantId: string, input: { name: string; capabilities?: string[] }): Promise<AgentRecord> {
+  const id = newId('agt');
+  const capabilities = input.capabilities ?? [];
+  await db.prepare(`INSERT INTO agents (id, tenant_id, name, capabilities_json) VALUES (?, ?, ?, ?)`).bind(id, tenantId, input.name, JSON.stringify(capabilities)).run();
+  return { id, tenantId, name: input.name, capabilities };
+}
+
+/** Mint a per-agent bearer token. The plaintext is returned once; only the hash is stored. */
+export async function createAgentToken(db: D1Database, tenantId: string, agentId: string, scopes: string[]): Promise<{ id: string; token: string }> {
+  const token = generateAgentToken();
+  const id = newId('tok');
+  await db
+    .prepare(`INSERT INTO agent_tokens (id, tenant_id, agent_id, token_hash, scopes_json) VALUES (?, ?, ?, ?, ?)`)
+    .bind(id, tenantId, agentId, await hashToken(token), JSON.stringify(scopes))
+    .run();
+  return { id, token };
+}
+
+/** Resolve a presented bearer token (by hash) to its agent + tenant + capabilities. */
+export async function findAgentByTokenHash(
+  db: D1Database,
+  hash: string,
+): Promise<{ tenantId: string; agentId: string; scopes: string[]; capabilities: string[] } | null> {
+  const row = await db
+    .prepare(
+      `SELECT at.tenant_id AS tenantId, at.agent_id AS agentId, at.scopes_json AS scopes, a.capabilities_json AS caps
+       FROM agent_tokens at JOIN agents a ON a.id = at.agent_id
+       WHERE at.token_hash = ? AND at.revoked_at IS NULL`,
+    )
+    .bind(hash)
+    .first<{ tenantId: string; agentId: string; scopes: string; caps: string }>();
+  if (!row) return null;
+  return { tenantId: row.tenantId, agentId: row.agentId, scopes: JSON.parse(row.scopes), capabilities: JSON.parse(row.caps) };
+}
+
+export async function listAgents(db: D1Database, tenantId: string): Promise<AgentRecord[]> {
+  const { results } = await db
+    .prepare(`SELECT id, tenant_id AS tenantId, name, capabilities_json AS caps FROM agents WHERE tenant_id = ? ORDER BY created_at ASC`)
+    .bind(tenantId)
+    .all<{ id: string; tenantId: string; name: string; caps: string }>();
+  return results.map((r) => ({ id: r.id, tenantId: r.tenantId, name: r.name, capabilities: JSON.parse(r.caps) }));
+}
+
+/** Index a board in the catalog so a workspace can list its boards (the DO holds the live state). */
+export async function recordBoard(db: D1Database, tenantId: string, input: { id: string; name: string; stagesJson: string }): Promise<void> {
+  await db
+    .prepare(`INSERT INTO boards (id, tenant_id, name, stages_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = datetime('now')`)
+    .bind(input.id, tenantId, input.name, input.stagesJson)
+    .run();
+}
+
+export async function listBoards(db: D1Database, tenantId: string): Promise<Array<{ id: string; name: string }>> {
+  const { results } = await db.prepare(`SELECT id, name FROM boards WHERE tenant_id = ? ORDER BY created_at DESC`).bind(tenantId).all<{ id: string; name: string }>();
+  return results;
+}
 
 /**
  * Minimal subset of the D1 query API we depend on — declared structurally so the repository can be

@@ -9,6 +9,8 @@ export default defineConfig({
     // Proxy API + live WebSocket to the Worker dev server (`wrangler dev`, default :8787).
     proxy: {
       '/v1': { target: 'http://localhost:8787', changeOrigin: true, ws: true },
+      '/auth': { target: 'http://localhost:8787', changeOrigin: true },
+      '/mcp': { target: 'http://localhost:8787', changeOrigin: true },
       '/health': { target: 'http://localhost:8787', changeOrigin: true },
     },
   },
