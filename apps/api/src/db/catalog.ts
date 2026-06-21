@@ -112,6 +112,11 @@ export async function listBoards(db: D1Database, tenantId: string): Promise<Arra
   return results;
 }
 
+/** Rename a board's catalog row (the DO's name is updated alongside). */
+export async function renameBoard(db: D1Database, tenantId: string, boardId: string, name: string): Promise<void> {
+  await db.prepare(`UPDATE boards SET name = ?, updated_at = datetime('now') WHERE tenant_id = ? AND id = ?`).bind(name, tenantId, boardId).run();
+}
+
 /** Remove a board from the catalog (tenant-scoped). The DO's live state is left untouched. */
 export async function deleteBoard(db: D1Database, tenantId: string, boardId: string): Promise<void> {
   await db.prepare(`DELETE FROM boards WHERE tenant_id = ? AND id = ?`).bind(tenantId, boardId).run();

@@ -24,7 +24,7 @@ import { handleMcpRequest } from './mcp/server';
 import { resolveMcpAuth, unauthorized, protectedResourceMetadata, MCP_PROTECTED_RESOURCE_PATH } from './mcp/auth';
 import { resolveUser, resolveAgent, type UserPrincipal, type AgentPrincipal } from './auth/resolve';
 import { handleAuthRoute } from './auth/routes';
-import { recordBoard, listBoards, deleteBoard, listAgents, createAgent, createAgentToken, deleteAgent } from './db/catalog';
+import { recordBoard, listBoards, renameBoard, deleteBoard, listAgents, createAgent, createAgentToken, deleteAgent } from './db/catalog';
 
 export { BoardDO };
 
@@ -159,6 +159,17 @@ export default {
         const snapshot: BoardSnapshot = await stub.getState();
         if (!snapshot.boardId) return Response.json({ error: 'board not found' }, { status: 404 });
         return Response.json(snapshot);
+      }
+
+      // PATCH /v1/boards/:id — rename the board (DO + catalog)
+      if (rest === '' && request.method === 'PATCH') {
+        const body = (await request.json()) as { name?: string };
+        if (body.name && body.name.trim() !== '') {
+          const r = await stub.setName(body.name.trim());
+          if (!r.ok) return Response.json({ error: r }, { status: statusForCode(r.code) });
+          await renameBoard(env.DB, tenantId, boardId, body.name.trim());
+        }
+        return Response.json(await stub.getState());
       }
 
       // DELETE /v1/boards/:id — remove the board from the workspace (catalog entry)

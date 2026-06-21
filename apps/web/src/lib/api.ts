@@ -132,6 +132,17 @@ export interface BoardSnapshot {
   gates: Gate[];
   references: Reference[];
   usage: BoardUsage;
+  github: { issueTrigger: boolean; webhookConfigured: boolean };
+}
+
+export interface Profile {
+  key: string;
+  name: string | null;
+  harness: string | null;
+  model: string | null;
+  permissionPolicy: string | null;
+  autonomyLevel: string | null;
+  capabilities: string[];
 }
 
 export const DEFAULT_STAGES: Stage[] = [
@@ -303,9 +314,30 @@ export async function getAgents(): Promise<Array<{ id: string; name: string; cap
   return ((await res.json()) as { agents: Array<{ id: string; name: string; capabilities: string[] }> }).agents;
 }
 
+/** Rename a board. */
+export function renameBoard(boardId: string, name: string): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}`, { method: 'PATCH', headers, body: JSON.stringify({ name }) });
+}
+
 /** Remove a board from the workspace. */
 export function deleteBoard(boardId: string): Promise<Response> {
   return fetch(`/v1/boards/${boardId}`, { method: 'DELETE', headers });
+}
+
+/** Configure the GitHub webhook secret + issue→card trigger for a board. */
+export function setGithubConfig(boardId: string, cfg: { secret?: string; issueTrigger?: boolean }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/github`, { method: 'PUT', headers, body: JSON.stringify(cfg) });
+}
+
+/** Agent profiles configured on a board (docs/05 §7). */
+export async function getProfiles(boardId: string): Promise<Profile[]> {
+  const res = await fetch(`/v1/boards/${boardId}/profiles`, { headers });
+  if (!res.ok) throw new Error(`getProfiles failed (${res.status})`);
+  return ((await res.json()) as { profiles: Profile[] }).profiles;
+}
+
+export function createProfile(boardId: string, input: { key: string; name?: string; model?: string; capabilities?: string[] }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/profiles`, { method: 'POST', headers, body: JSON.stringify(input) });
 }
 
 /** Revoke an agent and all of its tokens. */
