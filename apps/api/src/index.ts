@@ -24,7 +24,7 @@ import { handleMcpRequest } from './mcp/server';
 import { resolveMcpAuth, unauthorized, protectedResourceMetadata, MCP_PROTECTED_RESOURCE_PATH } from './mcp/auth';
 import { resolveUser, resolveAgent, type UserPrincipal, type AgentPrincipal } from './auth/resolve';
 import { handleAuthRoute } from './auth/routes';
-import { recordBoard, listBoards } from './db/catalog';
+import { recordBoard, listBoards, listAgents, createAgent, createAgentToken } from './db/catalog';
 
 export { BoardDO };
 
@@ -78,6 +78,22 @@ export default {
       const auth = await resolveMcpAuth(request, env);
       if (!auth) return unauthorized(request);
       return handleMcpRequest(request, env, auth);
+    }
+
+    // /v1/agents — a workspace's agents + token minting (the "connect an agent" surface). The
+    // plaintext token is returned ONCE on create; thereafter only its hash is stored.
+    if (path === '/v1/agents') {
+      const u = await resolveUser(request, env);
+      if (!u) return Response.json({ error: 'sign in to continue' }, { status: 401 });
+      if (request.method === 'GET') return Response.json({ agents: await listAgents(env.DB, u.tenantId) });
+      if (request.method === 'POST') {
+        const body = (await request.json()) as { name?: string; capabilities?: string[] };
+        if (!body.name || body.name.trim() === '') return Response.json({ error: 'name is required' }, { status: 400 });
+        const created = await createAgent(env.DB, u.tenantId, { name: body.name.trim(), capabilities: body.capabilities ?? [] });
+        const { token } = await createAgentToken(env.DB, u.tenantId, created.id, ['claim']);
+        return Response.json({ agent: created, token }, { status: 201 });
+      }
+      return Response.json({ error: 'method not allowed' }, { status: 405 });
     }
 
     const match = path.match(/^\/v1\/boards(?:\/([^/]+))?(?:\/(.*))?$/);

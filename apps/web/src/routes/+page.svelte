@@ -3,6 +3,7 @@
   import {
     createBoard,
     getBoard,
+    getBoards,
     createCard,
     moveCard,
     resolveGate,
@@ -11,23 +12,41 @@
     getCardActivities,
     getNotifications,
     markNotificationRead,
+    getMe,
+    logout,
+    createAgent,
     DEFAULT_STAGES,
     type BoardSnapshot,
     type GateDecision,
     type Attempt,
     type CardActivities,
     type Notification,
+    type User,
+    type AgentToken,
   } from '$lib/api';
   import { Button } from '$lib/components/ui/button';
   import { cardDraggable, columnDropTarget } from '$lib/dnd';
 
   const BOARD_KEY = 'kaambaan.boardId';
 
+  // auth + onboarding
+  let authState = $state<'loading' | 'signed-out' | 'ready'>('loading');
+  let user = $state<User | null>(null);
+  let needsBoard = $state(false); // signed in but no boards yet → onboarding
+  let creating = $state(false);
+
+  // connect-an-agent panel
+  let showConnect = $state(false);
+  let agentName = $state('');
+  let minted = $state<AgentToken | null>(null);
+  let minting = $state(false);
+
   let board = $state<BoardSnapshot | null>(null);
   let title = $state('');
   let error = $state<string | null>(null);
   let connected = $state(false);
   let overStage = $state<string | null>(null);
+  let socket: WebSocket | undefined;
 
   let notifications = $state<Notification[]>([]);
   let showNotifications = $state(false);
@@ -50,6 +69,12 @@
       error = String(e);
     }
   }
+
+  const mcpSnippet = $derived(
+    minted
+      ? JSON.stringify({ mcpServers: { kaambaan: { url: `${location.origin}/mcp`, headers: { Authorization: `Bearer ${minted.token}` } } } }, null, 2)
+      : '',
+  );
 
   const openCard = $derived(board && openCardId ? (board.cards.find((c) => c.id === openCardId) ?? null) : null);
   const openCardGate = $derived(openCardId ? gateFor(openCardId) : undefined);
@@ -99,33 +124,85 @@
     await refresh();
   }
 
+  async function openBoard(id: string): Promise<void> {
+    boardId = id;
+    needsBoard = false;
+    localStorage.setItem(BOARD_KEY, id);
+    await refresh();
+    socket?.close();
+    socket = openBoardSocket(id, refresh);
+    socket.addEventListener('open', () => (connected = true));
+    socket.addEventListener('close', () => (connected = false));
+  }
+
   onMount(() => {
-    let socket: WebSocket | undefined;
     void (async () => {
       try {
+        user = await getMe();
+        if (!user) {
+          authState = 'signed-out';
+          return;
+        }
+        authState = 'ready';
+        // Pick a board: the last one used, else the workspace's most recent, else onboarding.
         let id = localStorage.getItem(BOARD_KEY);
         if (id) {
           try {
             await getBoard(id);
           } catch {
-            id = null; // stale id — recreate
+            id = null;
+            localStorage.removeItem(BOARD_KEY);
           }
         }
         if (!id) {
-          id = await createBoard('My Board', DEFAULT_STAGES);
-          localStorage.setItem(BOARD_KEY, id);
+          const boards = await getBoards();
+          id = boards[0]?.id ?? null;
         }
-        boardId = id;
-        await refresh();
-        socket = openBoardSocket(id, refresh);
-        socket.addEventListener('open', () => (connected = true));
-        socket.addEventListener('close', () => (connected = false));
+        if (!id) {
+          needsBoard = true; // new workspace → show onboarding
+          return;
+        }
+        await openBoard(id);
       } catch (e) {
         error = String(e);
       }
     })();
     return () => socket?.close();
   });
+
+  async function createFirstBoard(): Promise<void> {
+    creating = true;
+    try {
+      await openBoard(await createBoard('My first board', DEFAULT_STAGES));
+    } catch (e) {
+      error = String(e);
+    } finally {
+      creating = false;
+    }
+  }
+
+  async function onLogout(): Promise<void> {
+    await logout();
+    location.reload();
+  }
+
+  async function mintAgent(): Promise<void> {
+    if (agentName.trim() === '') return;
+    minting = true;
+    try {
+      minted = await createAgent(agentName.trim(), ['research', 'review', 'publish']);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      minting = false;
+    }
+  }
+
+  function closeConnect(): void {
+    showConnect = false;
+    minted = null;
+    agentName = '';
+  }
 
   async function onAdd(e: SubmitEvent): Promise<void> {
     e.preventDefault();
@@ -215,13 +292,78 @@
   onkeydown={(e) => {
     if (e.key === 'Escape') {
       closeDrawer();
+      closeConnect();
       showNotifications = false;
     }
   }}
 />
 
 <main class="min-h-screen px-5 py-5 sm:px-7">
-  {#if !board}
+  {#if authState === 'loading'}
+    <div class="flex min-h-[70vh] flex-col items-center justify-center gap-3 text-center">
+      <svg class="arrowmark size-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 12h15" /><path d="M13 6l6 6-6 6" /><path d="M3 9l3 3-3 3" />
+      </svg>
+      <div class="wordmark text-lg">Kaambaan</div>
+      <div class="mono text-muted-foreground flex items-center gap-2 text-xs"><span class="live-dot"></span>warming up the flight deck…</div>
+    </div>
+  {:else if authState === 'signed-out'}
+    <!-- sign-in -->
+    <div class="mx-auto flex min-h-[85vh] max-w-md flex-col items-center justify-center gap-7 text-center">
+      <div class="flex flex-col items-center gap-3">
+        <svg class="arrowmark size-9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 12h15" /><path d="M13 6l6 6-6 6" /><path d="M3 9l3 3-3 3" />
+        </svg>
+        <div class="flex items-baseline gap-2.5">
+          <span class="wordmark text-3xl leading-none">Kaambaan</span>
+          <span class="eyebrow">agent flight deck</span>
+        </div>
+      </div>
+      <p class="text-muted-foreground max-w-sm text-sm leading-relaxed">
+        A board where AI agents do the work and you stay in command. Cards flow through your pipeline, agents pick up the ones they can handle, and nothing ships until you approve it.
+      </p>
+      <a
+        href="/auth/login"
+        class="bg-primary text-primary-foreground inline-flex items-center gap-2.5 rounded-[7px] px-4 py-2.5 text-sm font-medium transition hover:brightness-110"
+      >
+        <svg class="size-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.78 0 12.29c0 5.21 3.44 9.63 8.2 11.19.6.11.82-.26.82-.58l-.01-2C5.67 21.6 4.97 19.3 4.97 19.3c-.55-1.36-1.34-1.73-1.34-1.73-1.08-.73.09-.72.09-.72 1.2.08 1.84 1.21 1.84 1.21 1.07 1.8 2.8 1.28 3.49.98.11-.76.42-1.28.76-1.58-2.66-.3-5.47-1.31-5.47-5.83 0-1.29.47-2.34 1.24-3.17-.13-.3-.54-1.5.11-3.12 0 0 1-.32 3.3 1.21a11.5 11.5 0 0 1 6 0c2.3-1.53 3.3-1.21 3.3-1.21.65 1.62.24 2.82.12 3.12.77.83 1.23 1.88 1.23 3.17 0 4.53-2.81 5.53-5.49 5.82.43.37.81 1.1.81 2.22l-.01 3.29c0 .32.22.69.83.57A12 12 0 0 0 24 12.29C24 5.78 18.63.5 12 .5Z" /></svg>
+        Sign in with GitHub
+      </a>
+      {#if error}<p class="text-coral mono text-xs">{error}</p>{/if}
+    </div>
+  {:else if needsBoard}
+    <!-- onboarding: signed in, no board yet -->
+    <div class="mx-auto flex min-h-[85vh] max-w-xl flex-col justify-center gap-5">
+      <div class="flex items-center gap-3">
+        <svg class="arrowmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 12h15" /><path d="M13 6l6 6-6 6" /><path d="M3 9l3 3-3 3" />
+        </svg>
+        <div>
+          <div class="flex items-baseline gap-2.5"><span class="wordmark text-[19px] leading-none">Kaambaan</span><span class="eyebrow">agent flight deck</span></div>
+          <div class="mono text-muted-foreground mt-1 text-xs">welcome, {user?.name ?? user?.login ?? 'there'}</div>
+        </div>
+      </div>
+      <div class="bg-surface border-border rounded-[10px] border p-6">
+        <div class="eyebrow mb-2">first board</div>
+        <h1 class="wordmark text-xl leading-snug">Set up the pipeline your agents will work</h1>
+        <p class="text-muted-foreground mt-2.5 text-sm leading-relaxed">
+          A board is a pipeline. Work enters as cards and moves stage by stage — agents claim the cards they're capable of, do the work, and hand off down the line. An approval gate pauses the flow so nothing moves past review without your sign-off.
+        </p>
+        <div class="mt-4 flex flex-wrap items-center gap-1.5">
+          {#each DEFAULT_STAGES as s, i (s.key)}
+            <span class="border-border mono rounded-[6px] border px-2 py-1 text-[11px] {s.gate === 'approval' ? 'text-coral' : ''}">{s.name}{#if s.gate === 'approval'}<span class="ml-1 opacity-70">gate</span>{/if}</span>
+            {#if i < DEFAULT_STAGES.length - 1}<span style="color:var(--marigold)" aria-hidden="true">→</span>{/if}
+          {/each}
+        </div>
+        <div class="mt-6 flex flex-wrap gap-2.5">
+          <Button onclick={createFirstBoard} disabled={creating}>{creating ? 'Creating…' : 'Create my first board'}</Button>
+          <Button variant="outline" onclick={() => (showConnect = true)}>Connect an agent</Button>
+        </div>
+      </div>
+      <button onclick={onLogout} class="text-muted-foreground hover:text-foreground mono self-start text-xs">sign out</button>
+      {#if error}<p class="text-coral mono text-xs">{error}</p>{/if}
+    </div>
+  {:else if !board}
     <div class="flex min-h-[70vh] flex-col items-center justify-center gap-3 text-center">
       <svg class="arrowmark size-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M3 12h15" /><path d="M13 6l6 6-6 6" /><path d="M3 9l3 3-3 3" />
@@ -305,6 +447,22 @@
               {/if}
             </div>
           {/if}
+        </div>
+
+        <!-- connect an agent -->
+        <Button size="sm" variant="outline" onclick={() => (showConnect = true)}>Connect agent</Button>
+
+        <!-- identity -->
+        <div class="border-border flex items-center gap-2 border-l pl-2.5">
+          {#if user?.avatarUrl}
+            <img src={user.avatarUrl} alt="" class="size-6 rounded-full" />
+          {:else}
+            <span class="bg-inset text-muted-foreground mono inline-flex size-6 items-center justify-center rounded-full text-[10px]">{(user?.name ?? user?.login ?? '?').slice(0, 1).toUpperCase()}</span>
+          {/if}
+          <span class="text-muted-foreground hidden text-xs sm:inline">{user?.name ?? user?.login}</span>
+          <button onclick={onLogout} aria-label="Sign out" title="Sign out" class="text-muted-foreground hover:text-coral">
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></svg>
+          </button>
         </div>
       </div>
     </header>
@@ -537,6 +695,54 @@
           </div>
         {/if}
       </aside>
+    </div>
+  {/if}
+
+  <!-- connect an agent -->
+  {#if showConnect}
+    <div class="fixed inset-0 z-40 flex items-center justify-center p-4">
+      <button class="absolute inset-0 bg-black/55" onclick={closeConnect} aria-label="Close" tabindex="-1"></button>
+      <div class="bg-surface border-border drawer-in relative w-full max-w-lg rounded-[12px] border p-6 shadow-2xl">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="eyebrow mb-1">connect an agent</div>
+            <h2 class="wordmark text-lg leading-snug">Point an AI agent at this workspace</h2>
+          </div>
+          <button onclick={closeConnect} aria-label="Close" class="text-muted-foreground hover:text-foreground shrink-0">
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+
+        {#if !minted}
+          <p class="text-muted-foreground mt-2.5 text-sm leading-relaxed">
+            Name your agent and we'll mint a token it uses to claim and work cards. The token is shown once.
+          </p>
+          <div class="mt-4 flex gap-2">
+            <input
+              bind:value={agentName}
+              placeholder="e.g. Research bot"
+              onkeydown={(e) => {
+                if (e.key === 'Enter') mintAgent();
+              }}
+              class="bg-inset border-border focus:border-marigold flex-1 rounded-[7px] border px-3 py-2 text-sm outline-none"
+            />
+            <Button onclick={mintAgent} disabled={minting || agentName.trim() === ''}>{minting ? 'Minting…' : 'Generate token'}</Button>
+          </div>
+        {:else}
+          <p class="text-muted-foreground mt-2.5 text-sm leading-relaxed">
+            <span class="text-foreground">{minted.agent.name}</span>'s token —
+            <span class="text-coral">copy it now, it won't be shown again.</span>
+          </p>
+          <div class="bg-inset border-border mono mt-3 flex items-center justify-between gap-2 rounded-[7px] border px-3 py-2 text-xs">
+            <span class="truncate">{minted.token}</span>
+            <button onclick={() => navigator.clipboard?.writeText(minted!.token)} class="shrink-0 hover:brightness-110" style="color:var(--marigold)">copy</button>
+          </div>
+          <div class="eyebrow mt-5 mb-1.5">add it to your MCP client — .mcp.json</div>
+          <pre class="bg-inset border-border mono overflow-x-auto rounded-[7px] border p-3 text-[11px] leading-relaxed">{mcpSnippet}</pre>
+          <p class="text-muted-foreground mt-2 text-xs leading-relaxed">The agent claims cards whose stage matches its capabilities (research · review · publish), works them, and hands off down the pipeline.</p>
+          <div class="mt-5 flex justify-end"><Button onclick={closeConnect}>Done</Button></div>
+        {/if}
+      </div>
     </div>
   {/if}
 </main>

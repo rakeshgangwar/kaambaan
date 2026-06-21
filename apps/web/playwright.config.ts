@@ -19,7 +19,9 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'pnpm --filter @kaambaan/api dev',
+      // Migrate + seed the local D1 catalog before booting (board create now writes to it, and the
+      // dev workspace tnt_dev must exist to satisfy the catalog's foreign keys).
+      command: 'pnpm --filter @kaambaan/api dev:setup && pnpm --filter @kaambaan/api dev',
       url: 'http://localhost:8787/health',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,

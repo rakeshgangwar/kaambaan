@@ -45,7 +45,8 @@ export async function resolveUser(request: Request, env: Env): Promise<UserPrinc
     }
   }
   if (devAuth(env)) {
-    const tenantId = request.headers.get('X-Tenant-Id');
+    // Browsers can't set headers on a WebSocket upgrade, so the live feed passes ?tenant= instead.
+    const tenantId = request.headers.get('X-Tenant-Id') ?? new URL(request.url).searchParams.get('tenant');
     if (tenantId && tenantId.trim() !== '') {
       return { userId: request.headers.get('X-User-Id') ?? 'usr_dev', tenantId };
     }
