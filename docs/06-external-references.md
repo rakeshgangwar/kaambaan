@@ -54,6 +54,10 @@ references). The sub-state shows as a chip suffix on the card. **Trap #1** (clos
 auto-close on the default branch) is recorded as `mergedToDefaultBranch`; **trap #2**
 (`includeClosedPrs: true`) lives in the reconciliation query builders (`src/references/github-graphql.ts`).
 
+- The sub-state machine models `pull_request` (opened/synchronize/ready_for_review/converted_to_draft/
+  closed/reopened) and `issues` (assigned/closed/reopened). Review/comment events
+  (`pull_request_review`, `issue_comment`, …) are **not modeled yet** — they're the comment-→-follow-up
+  loop, reconciliation-only for now.
 - **⚠️ Remaining P5 work**: wiring the **GraphQL reconciliation cron Workflow** (the query builders +
   trap handling are built and tested; running them live needs a GitHub App installation token —
   operator config), **trap #3** (model CI-green as its own approval gate; surface the repo

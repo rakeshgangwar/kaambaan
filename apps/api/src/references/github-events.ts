@@ -22,7 +22,7 @@ interface Repo {
 export function mapGithubEvent(event: string, payload: unknown): GithubEventResult | null {
   const p = payload as Record<string, any>;
   const repo = (p.repository ?? {}) as Repo;
-  const fullName = repo.full_name;
+  const fullName = repo.full_name?.toLowerCase();
   if (!fullName) return null;
 
   if (event === 'pull_request') {

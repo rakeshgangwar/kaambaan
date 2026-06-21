@@ -24,7 +24,9 @@ export function recognizeReference(url: string): RecognizedReference {
 
   const [owner, repo, kind, id] = parsed.pathname.split('/').filter(Boolean);
   if (!owner || !repo) return { provider: 'github', sourceType: 'url' };
-  const slug = `${owner}/${repo}`;
+  // GitHub owner/repo are case-insensitive; normalize so an externalId from a mixed-case URL still
+  // matches the canonical `repository.full_name` a webhook delivers (docs/06 §3).
+  const slug = `${owner}/${repo}`.toLowerCase();
 
   if (!kind) return { provider: 'github', sourceType: 'repo', externalId: slug };
   if (kind === 'pull' && id) return { provider: 'github', sourceType: 'pull_request', externalId: `${slug}#${id}` };

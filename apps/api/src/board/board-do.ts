@@ -152,7 +152,8 @@ export type BoardErrorCode =
   | 'SEPARATION_OF_DUTIES'
   | 'INVALID_URL'
   | 'INVALID_SIGNATURE'
-  | 'NOT_CONFIGURED';
+  | 'NOT_CONFIGURED'
+  | 'INVALID_DELIVERY';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: BoardErrorCode; message: string };
 
@@ -184,7 +185,7 @@ export interface BoardStub {
     signature: string | null;
     deliveryId: string | null;
     event: string;
-  }): Promise<Result<{ deduped: boolean; matched: number }>>;
+  }): Promise<Result<{ deduped: boolean; matched: number; modeled: boolean }>>;
   resolveGate(input: {
     gateId: string;
     decision: GateDecision;
@@ -520,7 +521,7 @@ export class BoardDO extends DurableObject<Env> {
     signature: string | null;
     deliveryId: string | null;
     event: string;
-  }): Promise<Result<{ deduped: boolean; matched: number }>> {
+  }): Promise<Result<{ deduped: boolean; matched: number; modeled: boolean }>> {
     if (!this.getMeta('boardId')) {
       return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
     }
@@ -531,21 +532,24 @@ export class BoardDO extends DurableObject<Env> {
     if (!(await verifyGithubSignature(secret, input.rawBody, input.signature))) {
       return { ok: false, code: 'INVALID_SIGNATURE', message: 'invalid X-Hub-Signature-256' };
     }
-
-    if (input.deliveryId) {
-      const seen = this.sql.exec(`SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?`, input.deliveryId).toArray()[0];
-      if (seen) return { ok: true, value: { deduped: true, matched: 0 } };
-      this.sql.exec(`INSERT INTO webhook_deliveries (delivery_id, received_at) VALUES (?, ?)`, input.deliveryId, this.now());
+    // Fail closed: GitHub always sends X-GitHub-Delivery, so a missing one means replay protection
+    // would be silently disabled — reject rather than accept-without-dedup. (Dedup is recorded only
+    // after signature verification, so an unverified request can never poison this table.)
+    if (!input.deliveryId) {
+      return { ok: false, code: 'INVALID_DELIVERY', message: 'missing X-GitHub-Delivery' };
     }
+    const seen = this.sql.exec(`SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?`, input.deliveryId).toArray()[0];
+    if (seen) return { ok: true, value: { deduped: true, matched: 0, modeled: false } };
+    this.sql.exec(`INSERT INTO webhook_deliveries (delivery_id, received_at) VALUES (?, ?)`, input.deliveryId, this.now());
 
     let payload: unknown;
     try {
       payload = JSON.parse(input.rawBody);
     } catch {
-      return { ok: true, value: { deduped: false, matched: 0 } };
+      return { ok: true, value: { deduped: false, matched: 0, modeled: false } };
     }
     const mapped = mapGithubEvent(input.event, payload);
-    if (!mapped) return { ok: true, value: { deduped: false, matched: 0 } };
+    if (!mapped) return { ok: true, value: { deduped: false, matched: 0, modeled: false } };
 
     const now = this.now();
     const rows = this.sql.exec(`SELECT * FROM card_references WHERE external_id = ?`, mapped.externalId).toArray();
@@ -561,7 +565,9 @@ export class BoardDO extends DurableObject<Env> {
       );
       this.emit('reference.updated', { reference: this.mustGetReference(row.id as string) });
     }
-    return { ok: true, value: { deduped: false, matched: rows.length } };
+    // `modeled: true` with `matched: 0` means "a known event for a PR/issue no card references yet"
+    // — distinct from an unmodeled event or a parse miss (both `modeled: false`).
+    return { ok: true, value: { deduped: false, matched: rows.length, modeled: true } };
   }
 
   // ----- RPC: agent contract (docs/04) -----
