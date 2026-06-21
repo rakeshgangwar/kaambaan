@@ -510,13 +510,20 @@ export class BoardDO extends DurableObject<Env> {
       input.gateId,
     );
     if (input.decision === 'approve') {
-      this.advanceCard(cardId, gate.stage_key as string, '', this.getCardHandoffJson(cardId));
+      // The approver becomes the producer of any chained gate (keeps separation-of-duties intact).
+      this.advanceCard(cardId, gate.stage_key as string, input.decidedBy, this.getCardHandoffJson(cardId));
     } else if (input.decision === 'request_changes') {
+      // Keep the agent's prior handoff and add the reviewer's feedback so rework has full context.
+      const prior = this.parseHandoff(this.getCardHandoffJson(cardId));
+      const merged =
+        prior && typeof prior === 'object' && !Array.isArray(prior)
+          ? { ...prior, feedback: input.comment ?? null }
+          : { feedback: input.comment ?? null };
       this.sql.exec(
         `UPDATE cards SET current_stage_key = ?, state = 'submitted', delegate_agent_id = NULL,
          current_run_id = NULL, failure_count = 0, handoff_json = ?, updated_at = ? WHERE id = ?`,
         gate.return_stage_key,
-        JSON.stringify({ feedback: input.comment ?? null }),
+        JSON.stringify(merged),
         now,
         cardId,
       );
@@ -651,7 +658,9 @@ export class BoardDO extends DurableObject<Env> {
   /** Advance a card to the next stage — opening an approval gate on entry to a human review stage. */
   private advanceCard(cardId: string, fromStageKey: string, producedBy: string, handoffJson: string | null): void {
     const stages = this.stages();
-    const next = stages[stages.findIndex((s) => s.key === fromStageKey) + 1];
+    const idx = stages.findIndex((s) => s.key === fromStageKey);
+    if (idx === -1) return; // unknown stage — never silently advance to stage[0]
+    const next = stages[idx + 1];
     const now = this.now();
     if (!next) {
       this.sql.exec(
@@ -701,6 +710,10 @@ export class BoardDO extends DurableObject<Env> {
   private getCardHandoffJson(cardId: string): string | null {
     const row = this.getCardRow(cardId);
     return row ? ((row.handoff_json as string | null) ?? null) : null;
+  }
+
+  private parseHandoff(raw: string | null): JsonValue | null {
+    return raw ? (JSON.parse(raw) as JsonValue) : null;
   }
 
   private pendingGates(): GateView[] {

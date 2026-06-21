@@ -82,7 +82,8 @@ describe('BoardDO — approval gates', () => {
       }
       const again = await board.claim({ agentId: 'agt_r', capabilities: ['research'] });
       expect(again.claimed).toBe(true);
-      if (again.claimed) expect(again.handoff).toEqual({ feedback: 'tighten the intro' });
+      // the reworking agent keeps its prior handoff AND gets the reviewer's feedback
+      if (again.claimed) expect(again.handoff).toEqual({ summary: 'drafted', feedback: 'tighten the intro' });
     });
   });
 
@@ -134,6 +135,41 @@ describe('BoardDO — approval gates', () => {
       expect(gate.stageKey).toBe('build');
       const r = await board.resolveGate({ gateId: gate.id, decision: 'approve', decidedBy: 'usr_x' });
       expect(r.ok && r.value.currentStageKey).toBe('ship');
+    });
+  });
+
+  it('separation of duties holds across chained gates', async () => {
+    await runInDurableObject(stubFor('g-chained'), async (board: BoardDO) => {
+      await board.init({
+        id: 'brd_c',
+        tenantId: 'tnt_a',
+        name: 'Chained',
+        stages: [
+          { key: 'research', name: 'Research', order: 0, ownerKind: 'capability', owner: 'research' },
+          { key: 'review1', name: 'Review 1', order: 1, ownerKind: 'human', gate: 'approval' },
+          { key: 'review2', name: 'Review 2', order: 2, ownerKind: 'human', gate: 'approval' },
+          { key: 'publish', name: 'Publish', order: 3, ownerKind: 'capability', owner: 'publish' },
+        ],
+      });
+      await mustCreate(board, 'Doc');
+      const c = await board.claim({ agentId: 'agt_r', capabilities: ['research'] });
+      if (!c.claimed) throw new Error('expected claim');
+      await board.complete({ runId: c.runId, leaseEpoch: c.leaseEpoch });
+
+      // usr_x approves the first gate → the second gate opens with usr_x as its producer.
+      let gate = (await board.getState()).gates[0]!;
+      expect((await board.resolveGate({ gateId: gate.id, decision: 'approve', decidedBy: 'usr_x' })).ok).toBe(true);
+      gate = (await board.getState()).gates[0]!;
+      expect(gate.stageKey).toBe('review2');
+
+      // usr_x cannot approve the gate they just produced…
+      const self = await board.resolveGate({ gateId: gate.id, decision: 'approve', decidedBy: 'usr_x' });
+      expect(self.ok).toBe(false);
+      if (!self.ok) expect(self.code).toBe('SEPARATION_OF_DUTIES');
+
+      // …but a different reviewer can.
+      const other = await board.resolveGate({ gateId: gate.id, decision: 'approve', decidedBy: 'usr_y' });
+      expect(other.ok && other.value.currentStageKey).toBe('publish');
     });
   });
 });
