@@ -103,6 +103,23 @@
     return /^https?:\/\//i.test(url) ? url : null;
   }
 
+  const SUB_STATE_LABELS: Record<string, string> = {
+    draft_pr_open: 'draft',
+    pr_open: 'open',
+    agent_iterating: 'iterating',
+    awaiting_review: 'review',
+    merged: 'merged',
+    closed: 'closed',
+    agent_working: 'working',
+    issue_open: 'open',
+    issue_closed: 'closed',
+  };
+
+  function subStateLabel(ref: BoardSnapshot['references'][number]): string | null {
+    const s = ref.metadata?.subState;
+    return typeof s === 'string' ? (SUB_STATE_LABELS[s] ?? s) : null;
+  }
+
   function refLabel(ref: BoardSnapshot['references'][number]): string {
     if (ref.sourceType === 'pull_request') return `PR ${ref.externalId?.split('#')[1] ? `#${ref.externalId.split('#')[1]}` : ''}`.trim();
     if (ref.sourceType === 'issue') return `Issue ${ref.externalId?.split('#')[1] ? `#${ref.externalId.split('#')[1]}` : ''}`.trim();
@@ -207,11 +224,11 @@
                           title={ref.url}
                           class="bg-muted hover:bg-muted/70 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs"
                         >
-                          <span>🔗</span>{refLabel(ref)}
+                          <span>🔗</span>{refLabel(ref)}{#if subStateLabel(ref)}<span class="opacity-60">· {subStateLabel(ref)}</span>{/if}
                         </a>
                       {:else}
                         <span class="bg-muted inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs">
-                          <span>🔗</span>{refLabel(ref)}
+                          <span>🔗</span>{refLabel(ref)}{#if subStateLabel(ref)}<span class="opacity-60">· {subStateLabel(ref)}</span>{/if}
                         </span>
                       {/if}
                     {/each}

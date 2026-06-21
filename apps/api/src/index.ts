@@ -49,6 +49,10 @@ function statusForCode(code: BoardErrorCode): number {
       return 409;
     case 'SEPARATION_OF_DUTIES':
       return 403;
+    case 'INVALID_SIGNATURE':
+      return 401;
+    case 'NOT_CONFIGURED':
+      return 400;
   }
 }
 
@@ -140,6 +144,29 @@ export default {
         const result = await stub.addReference(resolveReferenceInput({ cardId: refMatch[1]!, ...body }));
         if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
         return Response.json({ reference: result.value });
+      }
+
+      // PUT /v1/boards/:id/github — configure the board's GitHub webhook secret (docs/06 §3)
+      if (rest === 'github' && request.method === 'PUT') {
+        const body = (await request.json()) as { secret: string };
+        const result = await stub.setGithubSecret(body.secret);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value);
+      }
+
+      // POST /v1/boards/:id/webhooks/github — inbound GitHub webhook (docs/06 §3).
+      // GitHub can't send X-Tenant-Id, so the configured webhook URL carries ?tenant=; the HMAC
+      // signature (verified in the DO) is the real authentication.
+      if (rest === 'webhooks/github' && request.method === 'POST') {
+        const rawBody = await request.text();
+        const result = await stub.handleGithubWebhook({
+          rawBody,
+          signature: request.headers.get('X-Hub-Signature-256'),
+          deliveryId: request.headers.get('X-GitHub-Delivery'),
+          event: request.headers.get('X-GitHub-Event') ?? '',
+        });
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value);
       }
 
       // POST /v1/boards/:id/claims — an agent claims a ready card (docs/04 §3)

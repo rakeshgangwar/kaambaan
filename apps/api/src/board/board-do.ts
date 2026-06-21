@@ -2,6 +2,8 @@ import { DurableObject } from 'cloudflare:workers';
 import type { TaskState } from '@kaambaan/contract';
 import type { Env } from '../env';
 import { newId } from '../ids';
+import { verifyGithubSignature } from '../references/github-signature';
+import { mapGithubEvent } from '../references/github-events';
 
 /** JSON-serializable value — used for everything that crosses the Durable Object RPC boundary. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -148,7 +150,9 @@ export type BoardErrorCode =
   | 'GATE_NOT_FOUND'
   | 'GATE_NOT_PENDING'
   | 'SEPARATION_OF_DUTIES'
-  | 'INVALID_URL';
+  | 'INVALID_URL'
+  | 'INVALID_SIGNATURE'
+  | 'NOT_CONFIGURED';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: BoardErrorCode; message: string };
 
@@ -174,6 +178,13 @@ export interface BoardStub {
   release(input: { runId: string; leaseEpoch: number; reason?: string }): Promise<Result<CardView>>;
   submitForReview(input: { runId: string; leaseEpoch: number; output?: JsonValue }): Promise<Result<CardView>>;
   addReference(input: ReferenceInput): Promise<Result<ReferenceView>>;
+  setGithubSecret(secret: string): Promise<Result<{ configured: true }>>;
+  handleGithubWebhook(input: {
+    rawBody: string;
+    signature: string | null;
+    deliveryId: string | null;
+    event: string;
+  }): Promise<Result<{ deduped: boolean; matched: number }>>;
   resolveGate(input: {
     gateId: string;
     decision: GateDecision;
@@ -308,6 +319,11 @@ export class BoardDO extends DurableObject<Env> {
       )`,
     );
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_refs_card ON card_references(card_id)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_refs_external ON card_references(external_id)`);
+    // Inbound webhook delivery dedup (docs/06 §3): GitHub may redeliver the same X-GitHub-Delivery.
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id TEXT PRIMARY KEY, received_at TEXT NOT NULL)`,
+    );
   }
 
   // ----- RPC: board lifecycle -----
@@ -482,6 +498,70 @@ export class BoardDO extends DurableObject<Env> {
     const ref = this.mustGetReference(id);
     this.emit('reference.added', { reference: ref });
     return { ok: true, value: ref };
+  }
+
+  /** Store/rotate this board's GitHub webhook secret (docs/06 §3, §6). */
+  async setGithubSecret(secret: string): Promise<Result<{ configured: true }>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    this.setMeta('githubWebhookSecret', secret);
+    return { ok: true, value: { configured: true } };
+  }
+
+  /**
+   * Ingest a GitHub webhook (docs/06 §3): verify the HMAC signature over the raw body, dedup on the
+   * delivery id, then apply the draft-PR sub-state machine to every reference matching the event's
+   * externalId. Verification + dedup + mutation are co-located here because the DO owns both the
+   * board's secret and the references.
+   */
+  async handleGithubWebhook(input: {
+    rawBody: string;
+    signature: string | null;
+    deliveryId: string | null;
+    event: string;
+  }): Promise<Result<{ deduped: boolean; matched: number }>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    const secret = this.getMeta('githubWebhookSecret');
+    if (!secret) {
+      return { ok: false, code: 'NOT_CONFIGURED', message: 'no github webhook secret configured for this board' };
+    }
+    if (!(await verifyGithubSignature(secret, input.rawBody, input.signature))) {
+      return { ok: false, code: 'INVALID_SIGNATURE', message: 'invalid X-Hub-Signature-256' };
+    }
+
+    if (input.deliveryId) {
+      const seen = this.sql.exec(`SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?`, input.deliveryId).toArray()[0];
+      if (seen) return { ok: true, value: { deduped: true, matched: 0 } };
+      this.sql.exec(`INSERT INTO webhook_deliveries (delivery_id, received_at) VALUES (?, ?)`, input.deliveryId, this.now());
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(input.rawBody);
+    } catch {
+      return { ok: true, value: { deduped: false, matched: 0 } };
+    }
+    const mapped = mapGithubEvent(input.event, payload);
+    if (!mapped) return { ok: true, value: { deduped: false, matched: 0 } };
+
+    const now = this.now();
+    const rows = this.sql.exec(`SELECT * FROM card_references WHERE external_id = ?`, mapped.externalId).toArray();
+    for (const row of rows) {
+      const current = (row.metadata_json ? JSON.parse(row.metadata_json as string) : {}) as Record<string, unknown>;
+      const merged = { ...current, ...mapped.metadata, subState: mapped.subState };
+      this.sql.exec(
+        `UPDATE card_references SET metadata_json = ?, sync_state = 'synced', last_synced_at = ?, updated_at = ? WHERE id = ?`,
+        JSON.stringify(merged),
+        now,
+        now,
+        row.id as string,
+      );
+      this.emit('reference.updated', { reference: this.mustGetReference(row.id as string) });
+    }
+    return { ok: true, value: { deduped: false, matched: rows.length } };
   }
 
   // ----- RPC: agent contract (docs/04) -----

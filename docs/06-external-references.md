@@ -42,11 +42,23 @@ snapshot + live feed. `addReference` is an idempotent upsert (`apps/api/src/boar
   (`apps/api/src/references/`), so a caller can pass just a url. The board UI renders each as a
   chip linking out.
 - The card-centric REST path from §3 (`PUT /v1/cards/:id/references`) is realized board-scoped for
-  now (the DO is keyed by tenant+board); a global card→board index lands with webhooks.
-- **⚠️ Deferred to P5.2**: GitHub webhook ingestion (HMAC `X-Hub-Signature-256` verify + delivery
-  dedup + a global reference→board routing index), the **draft-PR sub-state machine** (§2), the
-  **GraphQL reconciliation Workflow** (§3, the three correctness traps), and **reference-based gate
-  conditions** (§4). The reference model here is their prerequisite.
+  now (the DO is keyed by tenant+board).
+
+**GitHub webhook sync (P5.2)** — `POST /v1/boards/:boardId/webhooks/github` (the configured webhook
+URL carries `?tenant=`; the HMAC signature is the real auth). The Board DO verifies
+`X-Hub-Signature-256` against the board's secret (set via `PUT /v1/boards/:id/github`), dedups
+`X-GitHub-Delivery`, and applies the **draft-PR sub-state machine** (`src/references/github-events.ts`)
+to every reference matching the event's `externalId` — no global routing index needed because the
+webhook is board-scoped. Verify + dedup + mutate are co-located in the DO (it owns the secret and the
+references). The sub-state shows as a chip suffix on the card. **Trap #1** (closing keywords only
+auto-close on the default branch) is recorded as `mergedToDefaultBranch`; **trap #2**
+(`includeClosedPrs: true`) lives in the reconciliation query builders (`src/references/github-graphql.ts`).
+
+- **⚠️ Remaining P5 work**: wiring the **GraphQL reconciliation cron Workflow** (the query builders +
+  trap handling are built and tested; running them live needs a GitHub App installation token —
+  operator config), **trap #3** (model CI-green as its own approval gate; surface the repo
+  "Approve and run workflows" opt-out as board config), and **reference-based gate conditions** (§4,
+  the ⚠️ OPEN expression language).
 
 ## 2. GitHub: linking & the draft-PR sub-state machine
 

@@ -48,6 +48,7 @@ export interface Reference {
   provider: string;
   sourceType: string;
   externalId?: string | null;
+  metadata?: Record<string, unknown> | null;
   addedBy: 'agent' | 'user';
 }
 
