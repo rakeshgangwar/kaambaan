@@ -2,6 +2,8 @@ import { DurableObject } from 'cloudflare:workers';
 import type { TaskState } from '@kaambaan/contract';
 import type { Env } from '../env';
 import { newId } from '../ids';
+import { verifyGithubSignature } from '../references/github-signature';
+import { mapGithubEvent } from '../references/github-events';
 
 /** JSON-serializable value — used for everything that crosses the Durable Object RPC boundary. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -78,6 +80,38 @@ export interface GateView {
   createdAt: string;
 }
 
+/** A first-class external link on a card (docs/06). Idempotent on (cardId, url). */
+export interface ReferenceView {
+  id: string;
+  cardId: string;
+  url: string;
+  title: string | null;
+  subtitle: string | null;
+  provider: string;
+  sourceType: string;
+  externalId: string | null;
+  metadata: JsonValue | null;
+  syncState: 'synced' | 'stale' | 'error';
+  lastSyncedAt: string | null;
+  addedBy: 'agent' | 'user';
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface ReferenceInput {
+  cardId: string;
+  url: string;
+  provider: string;
+  sourceType: string;
+  title?: string;
+  subtitle?: string;
+  externalId?: string;
+  metadata?: JsonValue;
+  addedBy?: 'agent' | 'user';
+  syncState?: 'synced' | 'stale' | 'error';
+  lastSyncedAt?: string;
+}
+
 export interface BoardSnapshot {
   boardId: string | null;
   tenantId: string | null;
@@ -85,6 +119,7 @@ export interface BoardSnapshot {
   stages: StageDef[];
   cards: CardView[];
   gates: GateView[];
+  references: ReferenceView[];
 }
 
 /** The outcome of an agent claim — either work to do, or nothing available (docs/04 §3). */
@@ -114,7 +149,11 @@ export type BoardErrorCode =
   | 'STALE_LEASE'
   | 'GATE_NOT_FOUND'
   | 'GATE_NOT_PENDING'
-  | 'SEPARATION_OF_DUTIES';
+  | 'SEPARATION_OF_DUTIES'
+  | 'INVALID_URL'
+  | 'INVALID_SIGNATURE'
+  | 'NOT_CONFIGURED'
+  | 'INVALID_DELIVERY';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: BoardErrorCode; message: string };
 
@@ -139,6 +178,14 @@ export interface BoardStub {
   fail(input: { runId: string; leaseEpoch: number; reason: string }): Promise<Result<CardView>>;
   release(input: { runId: string; leaseEpoch: number; reason?: string }): Promise<Result<CardView>>;
   submitForReview(input: { runId: string; leaseEpoch: number; output?: JsonValue }): Promise<Result<CardView>>;
+  addReference(input: ReferenceInput): Promise<Result<ReferenceView>>;
+  setGithubSecret(secret: string): Promise<Result<{ configured: true }>>;
+  handleGithubWebhook(input: {
+    rawBody: string;
+    signature: string | null;
+    deliveryId: string | null;
+    event: string;
+  }): Promise<Result<{ deduped: boolean; matched: number; modeled: boolean }>>;
   resolveGate(input: {
     gateId: string;
     decision: GateDecision;
@@ -251,6 +298,33 @@ export class BoardDO extends DurableObject<Env> {
       )`,
     );
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gates_card ON gates(card_id)`);
+    // `references` is a SQL keyword, so the table is `card_references`. UNIQUE(card_id, url) is the
+    // idempotent-upsert dedup key (docs/06 §1).
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS card_references (
+        id TEXT PRIMARY KEY,
+        card_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT,
+        subtitle TEXT,
+        provider TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        external_id TEXT,
+        metadata_json TEXT,
+        sync_state TEXT NOT NULL DEFAULT 'synced',
+        last_synced_at TEXT,
+        added_by TEXT NOT NULL DEFAULT 'agent',
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        UNIQUE(card_id, url)
+      )`,
+    );
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_refs_card ON card_references(card_id)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_refs_external ON card_references(external_id)`);
+    // Inbound webhook delivery dedup (docs/06 §3): GitHub may redeliver the same X-GitHub-Delivery.
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS webhook_deliveries (delivery_id TEXT PRIMARY KEY, received_at TEXT NOT NULL)`,
+    );
   }
 
   // ----- RPC: board lifecycle -----
@@ -344,6 +418,156 @@ export class BoardDO extends DurableObject<Env> {
         payload: JSON.parse(r.payload_json as string),
         ts: r.ts as string,
       }));
+  }
+
+  /**
+   * Idempotent upsert of a first-class reference, keyed on (cardId, url) (docs/06 §1).
+   *
+   * **Full-replace (PUT) semantics**: a re-add overwrites the mutable fields (title, subtitle,
+   * provider, sourceType, externalId, metadata, syncState) with what's supplied — omitted optionals
+   * become null. Callers (and the P5.2 sync worker) must send the complete current record. The
+   * identity fields (id, created_at, added_by) are preserved across updates.
+   *
+   * Only `http(s)` urls are accepted: a reference url renders as an outbound link in the board UI,
+   * so rejecting other schemes (`javascript:`, `data:`, …) at the write boundary forecloses stored
+   * XSS and is the first slice of the §6 SSRF allowlist.
+   */
+  async addReference(input: ReferenceInput): Promise<Result<ReferenceView>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    let scheme = '';
+    try {
+      scheme = new URL(input.url).protocol;
+    } catch {
+      scheme = '';
+    }
+    if (scheme !== 'http:' && scheme !== 'https:') {
+      return { ok: false, code: 'INVALID_URL', message: `unsupported reference url scheme: ${input.url}` };
+    }
+    if (!this.getCardRow(input.cardId)) {
+      return { ok: false, code: 'CARD_NOT_FOUND', message: `card not found: ${input.cardId}` };
+    }
+    const now = this.now();
+    const metadataJson = input.metadata === undefined ? null : JSON.stringify(input.metadata);
+    const existing = this.sql
+      .exec(`SELECT id FROM card_references WHERE card_id = ? AND url = ?`, input.cardId, input.url)
+      .toArray()[0];
+
+    if (existing) {
+      const id = existing.id as string;
+      this.sql.exec(
+        `UPDATE card_references
+           SET title = ?, subtitle = ?, provider = ?, source_type = ?, external_id = ?,
+               metadata_json = ?, sync_state = ?, last_synced_at = ?, updated_at = ?
+         WHERE id = ?`,
+        input.title ?? null,
+        input.subtitle ?? null,
+        input.provider,
+        input.sourceType,
+        input.externalId ?? null,
+        metadataJson,
+        input.syncState ?? 'synced',
+        input.lastSyncedAt ?? null,
+        now,
+        id,
+      );
+      const ref = this.mustGetReference(id);
+      this.emit('reference.updated', { reference: ref });
+      return { ok: true, value: ref };
+    }
+
+    const id = newId('ref');
+    this.sql.exec(
+      `INSERT INTO card_references
+        (id, card_id, url, title, subtitle, provider, source_type, external_id, metadata_json, sync_state, last_synced_at, added_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      input.cardId,
+      input.url,
+      input.title ?? null,
+      input.subtitle ?? null,
+      input.provider,
+      input.sourceType,
+      input.externalId ?? null,
+      metadataJson,
+      input.syncState ?? 'synced',
+      input.lastSyncedAt ?? null,
+      input.addedBy ?? 'agent',
+      now,
+    );
+    const ref = this.mustGetReference(id);
+    this.emit('reference.added', { reference: ref });
+    return { ok: true, value: ref };
+  }
+
+  /** Store/rotate this board's GitHub webhook secret (docs/06 §3, §6). */
+  async setGithubSecret(secret: string): Promise<Result<{ configured: true }>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    this.setMeta('githubWebhookSecret', secret);
+    return { ok: true, value: { configured: true } };
+  }
+
+  /**
+   * Ingest a GitHub webhook (docs/06 §3): verify the HMAC signature over the raw body, dedup on the
+   * delivery id, then apply the draft-PR sub-state machine to every reference matching the event's
+   * externalId. Verification + dedup + mutation are co-located here because the DO owns both the
+   * board's secret and the references.
+   */
+  async handleGithubWebhook(input: {
+    rawBody: string;
+    signature: string | null;
+    deliveryId: string | null;
+    event: string;
+  }): Promise<Result<{ deduped: boolean; matched: number; modeled: boolean }>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    const secret = this.getMeta('githubWebhookSecret');
+    if (!secret) {
+      return { ok: false, code: 'NOT_CONFIGURED', message: 'no github webhook secret configured for this board' };
+    }
+    if (!(await verifyGithubSignature(secret, input.rawBody, input.signature))) {
+      return { ok: false, code: 'INVALID_SIGNATURE', message: 'invalid X-Hub-Signature-256' };
+    }
+    // Fail closed: GitHub always sends X-GitHub-Delivery, so a missing one means replay protection
+    // would be silently disabled — reject rather than accept-without-dedup. (Dedup is recorded only
+    // after signature verification, so an unverified request can never poison this table.)
+    if (!input.deliveryId) {
+      return { ok: false, code: 'INVALID_DELIVERY', message: 'missing X-GitHub-Delivery' };
+    }
+    const seen = this.sql.exec(`SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?`, input.deliveryId).toArray()[0];
+    if (seen) return { ok: true, value: { deduped: true, matched: 0, modeled: false } };
+    this.sql.exec(`INSERT INTO webhook_deliveries (delivery_id, received_at) VALUES (?, ?)`, input.deliveryId, this.now());
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(input.rawBody);
+    } catch {
+      return { ok: true, value: { deduped: false, matched: 0, modeled: false } };
+    }
+    const mapped = mapGithubEvent(input.event, payload);
+    if (!mapped) return { ok: true, value: { deduped: false, matched: 0, modeled: false } };
+
+    const now = this.now();
+    const rows = this.sql.exec(`SELECT * FROM card_references WHERE external_id = ?`, mapped.externalId).toArray();
+    for (const row of rows) {
+      const current = (row.metadata_json ? JSON.parse(row.metadata_json as string) : {}) as Record<string, unknown>;
+      const merged = { ...current, ...mapped.metadata, subState: mapped.subState };
+      this.sql.exec(
+        `UPDATE card_references SET metadata_json = ?, sync_state = 'synced', last_synced_at = ?, updated_at = ? WHERE id = ?`,
+        JSON.stringify(merged),
+        now,
+        now,
+        row.id as string,
+      );
+      this.emit('reference.updated', { reference: this.mustGetReference(row.id as string) });
+    }
+    // `modeled: true` with `matched: 0` means "a known event for a PR/issue no card references yet"
+    // — distinct from an unmodeled event or a parse miss (both `modeled: false`).
+    return { ok: true, value: { deduped: false, matched: rows.length, modeled: true } };
   }
 
   // ----- RPC: agent contract (docs/04) -----
@@ -829,6 +1053,38 @@ export class BoardDO extends DurableObject<Env> {
     };
   }
 
+  private rowToReference(row: Row): ReferenceView {
+    return {
+      id: row.id as string,
+      cardId: row.card_id as string,
+      url: row.url as string,
+      title: (row.title as string | null) ?? null,
+      subtitle: (row.subtitle as string | null) ?? null,
+      provider: row.provider as string,
+      sourceType: row.source_type as string,
+      externalId: (row.external_id as string | null) ?? null,
+      metadata: row.metadata_json ? (JSON.parse(row.metadata_json as string) as JsonValue) : null,
+      syncState: row.sync_state as 'synced' | 'stale' | 'error',
+      lastSyncedAt: (row.last_synced_at as string | null) ?? null,
+      addedBy: row.added_by as 'agent' | 'user',
+      createdAt: row.created_at as string,
+      updatedAt: (row.updated_at as string | null) ?? null,
+    };
+  }
+
+  private mustGetReference(id: string): ReferenceView {
+    const row = this.sql.exec(`SELECT * FROM card_references WHERE id = ?`, id).toArray()[0];
+    if (!row) throw new Error(`invariant violation: reference ${id} missing immediately after write`);
+    return this.rowToReference(row);
+  }
+
+  private allReferences(): ReferenceView[] {
+    return this.sql
+      .exec(`SELECT * FROM card_references ORDER BY created_at ASC`)
+      .toArray()
+      .map((r) => this.rowToReference(r));
+  }
+
   private snapshot(): BoardSnapshot {
     const boardId = this.getMeta('boardId');
     return {
@@ -838,6 +1094,7 @@ export class BoardDO extends DurableObject<Env> {
       stages: this.stages(),
       cards: boardId ? this.allCards() : [],
       gates: boardId ? this.pendingGates() : [],
+      references: boardId ? this.allReferences() : [],
     };
   }
 

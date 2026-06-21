@@ -10,6 +10,7 @@ describe('MCP tools — registration', () => {
     const byName = new Map(tools.map((t) => [t.name, t]));
 
     expect([...byName.keys()].sort()).toEqual([
+      'kaambaan_add_reference',
       'kaambaan_block',
       'kaambaan_claim_card',
       'kaambaan_complete',
@@ -29,6 +30,7 @@ describe('MCP tools — registration', () => {
       idempotentHint: false,
     });
     expect(byName.get('kaambaan_heartbeat')!.annotations).toMatchObject({ idempotentHint: true });
+    expect(byName.get('kaambaan_add_reference')!.annotations).toMatchObject({ idempotentHint: true });
     expect(byName.get('kaambaan_block')!.annotations).toMatchObject({ destructiveHint: true });
     expect(byName.get('kaambaan_fail')!.annotations).toMatchObject({ destructiveHint: true });
     expect(byName.get('kaambaan_release')!.annotations).toMatchObject({ destructiveHint: true });
@@ -169,6 +171,50 @@ describe('MCP tools — run verbs', () => {
     await initBoard(AUTH, 'brd_gc', RESEARCH_PIPELINE);
     const client = await connectMcp(depsFor(AUTH));
     const res = await client.callTool({ name: 'kaambaan_get_card', arguments: { boardId: 'brd_gc', cardId: 'card_nope' } });
+    expect(res.isError).toBe(true);
+    expect((res.content as Array<{ text: string }>)[0]!.text).toContain('CARD_NOT_FOUND');
+  });
+});
+
+describe('MCP tools — add_reference', () => {
+  async function withCard(boardId: string) {
+    await initBoard(AUTH, boardId, RESEARCH_PIPELINE);
+    const c = await depsFor(AUTH).boardStub(boardId).createCard({ title: 'Card', ownerUserId: 'usr_a' });
+    if (!c.ok) throw new Error('seed');
+    return { client: await connectMcp(depsFor(AUTH)), cardId: c.value.id };
+  }
+
+  it('auto-enriches a bare GitHub PR url into provider/sourceType/externalId', async () => {
+    const { client, cardId } = await withCard('brd_ref_mcp');
+    const res = await client.callTool({
+      name: 'kaambaan_add_reference',
+      arguments: { boardId: 'brd_ref_mcp', cardId, url: 'https://github.com/org/repo/pull/42' },
+    });
+    expect(res.isError).toBeFalsy();
+    expect(toolJson(res)).toMatchObject({
+      provider: 'github',
+      sourceType: 'pull_request',
+      externalId: 'org/repo#42',
+      addedBy: 'agent',
+    });
+  });
+
+  it('is idempotent on (cardId, url)', async () => {
+    const { client, cardId } = await withCard('brd_ref_idem');
+    const args = { boardId: 'brd_ref_idem', cardId, url: 'https://github.com/org/repo/pull/9' };
+    await client.callTool({ name: 'kaambaan_add_reference', arguments: { ...args, title: 'first' } });
+    await client.callTool({ name: 'kaambaan_add_reference', arguments: { ...args, title: 'second' } });
+    const refs = (await depsFor(AUTH).boardStub('brd_ref_idem').getState()).references;
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.title).toBe('second');
+  });
+
+  it('returns isError for an unknown card', async () => {
+    const { client } = await withCard('brd_ref_nocard');
+    const res = await client.callTool({
+      name: 'kaambaan_add_reference',
+      arguments: { boardId: 'brd_ref_nocard', cardId: 'card_nope', url: 'https://x.y' },
+    });
     expect(res.isError).toBe(true);
     expect((res.content as Array<{ text: string }>)[0]!.text).toContain('CARD_NOT_FOUND');
   });

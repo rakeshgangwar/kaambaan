@@ -31,6 +31,39 @@ attachments; the GitHub sync from GitHub's REST/GraphQL + webhooks.
 - Recognized URL shapes (GitHub PR/issue, repo) get **richer rendering and gating** (§4); a bare
   url is still a valid, generic reference (domain-agnostic — references aren't git-specific).
 
+### Implementation (P5)
+
+References live in the Board DO (`card_references`, `UNIQUE(card_id, url)`), surfaced in the board
+snapshot + live feed. `addReference` is an idempotent upsert (`apps/api/src/board/board-do.ts`).
+
+- **Surfaces**: `PUT /v1/boards/:boardId/cards/:cardId/references` (REST) and the MCP
+  `kaambaan_add_reference` tool — both call `resolveReferenceInput`, which **auto-recognizes**
+  GitHub PR/issue/repo/commit URLs into `provider`/`sourceType`/`externalId`
+  (`apps/api/src/references/`), so a caller can pass just a url. The board UI renders each as a
+  chip linking out.
+- The card-centric REST path from §3 (`PUT /v1/cards/:id/references`) is realized board-scoped for
+  now (the DO is keyed by tenant+board).
+
+**GitHub webhook sync (P5.2)** — `POST /v1/boards/:boardId/webhooks/github` (the configured webhook
+URL carries `?tenant=`; the HMAC signature is the real auth). The Board DO verifies
+`X-Hub-Signature-256` against the board's secret (set via `PUT /v1/boards/:id/github`), dedups
+`X-GitHub-Delivery`, and applies the **draft-PR sub-state machine** (`src/references/github-events.ts`)
+to every reference matching the event's `externalId` — no global routing index needed because the
+webhook is board-scoped. Verify + dedup + mutate are co-located in the DO (it owns the secret and the
+references). The sub-state shows as a chip suffix on the card. **Trap #1** (closing keywords only
+auto-close on the default branch) is recorded as `mergedToDefaultBranch`; **trap #2**
+(`includeClosedPrs: true`) lives in the reconciliation query builders (`src/references/github-graphql.ts`).
+
+- The sub-state machine models `pull_request` (opened/synchronize/ready_for_review/converted_to_draft/
+  closed/reopened) and `issues` (assigned/closed/reopened). Review/comment events
+  (`pull_request_review`, `issue_comment`, …) are **not modeled yet** — they're the comment-→-follow-up
+  loop, reconciliation-only for now.
+- **⚠️ Remaining P5 work**: wiring the **GraphQL reconciliation cron Workflow** (the query builders +
+  trap handling are built and tested; running them live needs a GitHub App installation token —
+  operator config), **trap #3** (model CI-green as its own approval gate; surface the repo
+  "Approve and run workflows" opt-out as board config), and **reference-based gate conditions** (§4,
+  the ⚠️ OPEN expression language).
+
 ## 2. GitHub: linking & the draft-PR sub-state machine
 
 When an agent works a coding card, the **GitHub draft PR is the agent's work surface** — its

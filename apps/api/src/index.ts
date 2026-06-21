@@ -19,6 +19,7 @@ import {
 import type { Env } from './env';
 import { newId } from './ids';
 import { boardStub } from './board/stub';
+import { resolveReferenceInput } from './references/resolve';
 import { handleMcpRequest } from './mcp/server';
 import { resolveBearer, unauthorized, protectedResourceMetadata, MCP_PROTECTED_RESOURCE_PATH } from './mcp/auth';
 
@@ -37,6 +38,8 @@ function statusForCode(code: BoardErrorCode): number {
     case 'WIP_LIMIT':
       return 409;
     case 'UNKNOWN_STAGE':
+    case 'INVALID_URL':
+    case 'INVALID_DELIVERY':
       return 400;
     case 'CARD_NOT_FOUND':
     case 'NOT_INITIALIZED':
@@ -47,6 +50,10 @@ function statusForCode(code: BoardErrorCode): number {
       return 409;
     case 'SEPARATION_OF_DUTIES':
       return 403;
+    case 'INVALID_SIGNATURE':
+      return 401;
+    case 'NOT_CONFIGURED':
+      return 400;
   }
 }
 
@@ -120,6 +127,47 @@ export default {
         const result = await stub.moveCard(moveMatch[1]!, body.toStageKey);
         if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
         return Response.json({ card: result.value });
+      }
+
+      // PUT /v1/boards/:id/cards/:cardId/references — idempotent reference upsert (docs/06 §1)
+      const refMatch = rest.match(/^cards\/([^/]+)\/references$/);
+      if (refMatch && request.method === 'PUT') {
+        const body = (await request.json()) as {
+          url: string;
+          provider?: string;
+          sourceType?: string;
+          title?: string;
+          subtitle?: string;
+          externalId?: string;
+          metadata?: Record<string, unknown>;
+          addedBy?: 'agent' | 'user';
+        };
+        const result = await stub.addReference(resolveReferenceInput({ cardId: refMatch[1]!, ...body }));
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json({ reference: result.value });
+      }
+
+      // PUT /v1/boards/:id/github — configure the board's GitHub webhook secret (docs/06 §3)
+      if (rest === 'github' && request.method === 'PUT') {
+        const body = (await request.json()) as { secret: string };
+        const result = await stub.setGithubSecret(body.secret);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value);
+      }
+
+      // POST /v1/boards/:id/webhooks/github — inbound GitHub webhook (docs/06 §3).
+      // GitHub can't send X-Tenant-Id, so the configured webhook URL carries ?tenant=; the HMAC
+      // signature (verified in the DO) is the real authentication.
+      if (rest === 'webhooks/github' && request.method === 'POST') {
+        const rawBody = await request.text();
+        const result = await stub.handleGithubWebhook({
+          rawBody,
+          signature: request.headers.get('X-Hub-Signature-256'),
+          deliveryId: request.headers.get('X-GitHub-Delivery'),
+          event: request.headers.get('X-GitHub-Event') ?? '',
+        });
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value);
       }
 
       // POST /v1/boards/:id/claims — an agent claims a ready card (docs/04 §3)
