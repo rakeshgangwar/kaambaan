@@ -24,7 +24,7 @@ import { handleMcpRequest } from './mcp/server';
 import { resolveMcpAuth, unauthorized, protectedResourceMetadata, MCP_PROTECTED_RESOURCE_PATH } from './mcp/auth';
 import { resolveUser, resolveAgent, type UserPrincipal, type AgentPrincipal } from './auth/resolve';
 import { handleAuthRoute } from './auth/routes';
-import { recordBoard, listBoards, listAgents, createAgent, createAgentToken } from './db/catalog';
+import { recordBoard, listBoards, deleteBoard, listAgents, createAgent, createAgentToken, deleteAgent } from './db/catalog';
 
 export { BoardDO };
 
@@ -80,11 +80,20 @@ export default {
       return handleMcpRequest(request, env, auth);
     }
 
-    // /v1/agents — a workspace's agents + token minting (the "connect an agent" surface). The
+    // /v1/agents[/:id] — a workspace's agents + token minting (the "connect an agent" surface). The
     // plaintext token is returned ONCE on create; thereafter only its hash is stored.
-    if (path === '/v1/agents') {
+    const agentsMatch = path.match(/^\/v1\/agents(?:\/([^/]+))?$/);
+    if (agentsMatch) {
       const u = await resolveUser(request, env);
       if (!u) return Response.json({ error: 'sign in to continue' }, { status: 401 });
+      const agentId = agentsMatch[1];
+      if (agentId) {
+        if (request.method === 'DELETE') {
+          await deleteAgent(env.DB, u.tenantId, agentId);
+          return new Response(null, { status: 204 });
+        }
+        return Response.json({ error: 'method not allowed' }, { status: 405 });
+      }
       if (request.method === 'GET') return Response.json({ agents: await listAgents(env.DB, u.tenantId) });
       if (request.method === 'POST') {
         const body = (await request.json()) as { name?: string; capabilities?: string[] };
@@ -150,6 +159,12 @@ export default {
         const snapshot: BoardSnapshot = await stub.getState();
         if (!snapshot.boardId) return Response.json({ error: 'board not found' }, { status: 404 });
         return Response.json(snapshot);
+      }
+
+      // DELETE /v1/boards/:id — remove the board from the workspace (catalog entry)
+      if (rest === '' && request.method === 'DELETE') {
+        await deleteBoard(env.DB, tenantId, boardId);
+        return new Response(null, { status: 204 });
       }
 
       // POST /v1/boards/:id/cards — create a card (owner defaults to the signed-in user)

@@ -46,4 +46,16 @@ describe('REST — /v1/agents (mint token + real-token auth)', () => {
     const noAuth = await SELF.fetch('https://api.test/v1/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'X' }) });
     expect(noAuth.status).toBe(401);
   });
+
+  it('deletes a board and an agent via REST (DELETE)', async () => {
+    const boardId = await createBoard('tnt_mgmt');
+    const delBoard = await SELF.fetch(`https://api.test/v1/boards/${boardId}`, { method: 'DELETE', headers: dev('tnt_mgmt') });
+    expect(delBoard.status).toBe(204);
+    expect((await (await SELF.fetch('https://api.test/v1/boards', { headers: dev('tnt_mgmt') })).json<{ boards: unknown[] }>()).boards).toEqual([]);
+
+    const created = await (await SELF.fetch('https://api.test/v1/agents', { method: 'POST', headers: dev('tnt_mgmt'), body: JSON.stringify({ name: 'Bot' }) })).json<{ agent: { id: string } }>();
+    const delAgent = await SELF.fetch(`https://api.test/v1/agents/${created.agent.id}`, { method: 'DELETE', headers: dev('tnt_mgmt') });
+    expect(delAgent.status).toBe(204);
+    expect((await (await SELF.fetch('https://api.test/v1/agents', { headers: dev('tnt_mgmt') })).json<{ agents: unknown[] }>()).agents).toEqual([]);
+  });
 });

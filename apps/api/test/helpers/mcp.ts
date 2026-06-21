@@ -6,11 +6,12 @@ import { registerKaambaanTools, type ToolDeps, type McpAuth } from '../../src/mc
 import type { BoardStub, BoardInit } from '../../src/board/board-do';
 
 /** Build the tool dependencies against the real Board DO, scoped to one tenant (as the Worker does). */
-export function depsFor(auth: McpAuth): ToolDeps {
+export function depsFor(auth: McpAuth, boards: Array<{ id: string; name: string }> = []): ToolDeps {
   return {
     auth,
     boardStub: (boardId: string) =>
       env.BOARD_DO.get(env.BOARD_DO.idFromName(`${auth.tenantId}:${boardId}`)) as unknown as BoardStub,
+    listBoards: async () => boards,
   };
 }
 

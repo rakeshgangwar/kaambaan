@@ -17,10 +17,12 @@ describe('MCP tools — registration', () => {
       'kaambaan_fail',
       'kaambaan_get_card',
       'kaambaan_heartbeat',
+      'kaambaan_list_work',
       'kaambaan_post_activity',
       'kaambaan_release',
       'kaambaan_submit_for_review',
     ]);
+    expect(byName.get('kaambaan_list_work')!.annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true });
 
     // The annotation table in docs/05 §2 — honest hints so harnesses prompt humans correctly.
     expect(byName.get('kaambaan_get_card')!.annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true });

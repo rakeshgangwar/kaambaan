@@ -10,6 +10,9 @@ import {
   findAgentByTokenHash,
   recordBoard,
   listBoards,
+  listAgents,
+  deleteBoard,
+  deleteAgent,
 } from '../src/db/catalog';
 import { hashToken } from '../src/auth/agent-token';
 
@@ -53,5 +56,22 @@ describe('catalog (D1) — auth, workspaces, agent tokens', () => {
     // another workspace sees none of it
     const other = await ensurePersonalWorkspace(env.DB, (await upsertUserByEmail(env.DB, { email: 'x@x.com' })).id, 'X');
     expect(await listBoards(env.DB, other.id)).toEqual([]);
+  });
+
+  it('deletes a board, and deletes an agent with its tokens (so the token stops resolving)', async () => {
+    const u = await upsertUserByEmail(env.DB, { email: 'del@x.com', name: 'Del' });
+    const t = await ensurePersonalWorkspace(env.DB, u.id, 'Del');
+
+    await recordBoard(env.DB, t.id, { id: 'brd_del', name: 'Del board', stagesJson: '[]' });
+    await deleteBoard(env.DB, t.id, 'brd_del');
+    expect(await listBoards(env.DB, t.id)).toEqual([]);
+
+    const agent = await createAgent(env.DB, t.id, { name: 'Bot', capabilities: ['research'] });
+    const { token } = await createAgentToken(env.DB, t.id, agent.id, ['claim']);
+    expect((await listAgents(env.DB, t.id)).length).toBe(1);
+
+    await deleteAgent(env.DB, t.id, agent.id);
+    expect(await listAgents(env.DB, t.id)).toEqual([]);
+    expect(await findAgentByTokenHash(env.DB, await hashToken(token))).toBeNull();
   });
 });

@@ -24,6 +24,8 @@ export interface ToolDeps {
   auth: McpAuth;
   /** Build a Board DO stub for (tenant, board) — identical to the Worker's `boardStub` helper. */
   boardStub: (boardId: string) => BoardStub;
+  /** List the boards in the caller's workspace (for the work-discovery tool). */
+  listBoards: () => Promise<Array<{ id: string; name: string }>>;
 }
 
 const ok = (value: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
@@ -40,6 +42,29 @@ const json = z.record(z.string(), z.unknown());
 
 export function registerKaambaanTools(server: McpServer, deps: ToolDeps): void {
   const { auth } = deps;
+
+  server.registerTool(
+    'kaambaan_list_work',
+    {
+      description:
+        'Discover where there is work for you: lists the boards in your workspace with how many cards are ' +
+        'ready for your capabilities right now. Start here to find a boardId, then call kaambaan_claim_card. ' +
+        'Returns { capabilities, boards: [{ boardId, name, readyForYou }] }.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    async () => {
+      const boards = await deps.listBoards();
+      const work = await Promise.all(
+        boards.map(async (b) => ({
+          boardId: b.id,
+          name: b.name,
+          readyForYou: await deps.boardStub(b.id).countReadyForCapabilities(auth.agentId, auth.capabilities),
+        })),
+      );
+      return ok({ capabilities: auth.capabilities, boards: work });
+    },
+  );
 
   server.registerTool(
     'kaambaan_claim_card',

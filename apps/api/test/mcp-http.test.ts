@@ -74,6 +74,10 @@ describe('MCP server — Streamable HTTP transport', () => {
     const { result } = await rpc(res);
     expect(result.serverInfo.name).toBe('kaambaan');
     expect(result.capabilities.tools).toBeDefined();
+    // The server is self-describing: the workflow protocol ships in `instructions` so any client can
+    // use it without prior knowledge.
+    expect(result.instructions).toContain('kaambaan_list_work');
+    expect(result.instructions).toContain('kaambaan_claim_card');
   });
 
   it('lists tools over HTTP', async () => {
