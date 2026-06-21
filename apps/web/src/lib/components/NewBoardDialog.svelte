@@ -1,0 +1,172 @@
+<script lang="ts">
+  import { Button } from '$lib/components/ui/button';
+  import { createBoard, BOARD_TEMPLATES, type Stage } from '$lib/api';
+
+  let { open = false, onClose, onCreated }: { open?: boolean; onClose: () => void; onCreated: (boardId: string) => void } = $props();
+
+  // A stage being edited. `owner` is the capability an agent must hold to claim an agent lane.
+  interface DraftStage {
+    name: string;
+    ownerKind: 'capability' | 'human';
+    owner: string;
+    gate: boolean;
+    wipLimit: number | null;
+  }
+
+  let name = $state('');
+  let stages = $state<DraftStage[]>([]);
+  let creating = $state(false);
+  let error = $state<string | null>(null);
+  let seeded = $state(false);
+
+  function fromTemplate(tplStages: Stage[]): DraftStage[] {
+    return tplStages.map((s) => ({
+      name: s.name,
+      ownerKind: s.ownerKind ?? 'human',
+      owner: s.owner ?? '',
+      gate: s.gate === 'approval',
+      wipLimit: s.wipLimit ?? null,
+    }));
+  }
+
+  // Seed from the Agent pipeline the first time the dialog opens.
+  $effect(() => {
+    if (open && !seeded) {
+      stages = fromTemplate(BOARD_TEMPLATES[0]!.stages);
+      seeded = true;
+    }
+    if (!open) seeded = false;
+  });
+
+  function seedFrom(id: string): void {
+    const tpl = BOARD_TEMPLATES.find((t) => t.id === id);
+    stages = tpl ? fromTemplate(tpl.stages) : [{ name: 'To do', ownerKind: 'human', owner: '', gate: false, wipLimit: null }];
+  }
+
+  function addStage(): void {
+    stages = [...stages, { name: '', ownerKind: 'capability', owner: '', gate: false, wipLimit: null }];
+  }
+  function removeStage(i: number): void {
+    stages = stages.filter((_, idx) => idx !== i);
+  }
+  function move(i: number, dir: -1 | 1): void {
+    const j = i + dir;
+    if (j < 0 || j >= stages.length) return;
+    const next = [...stages];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    stages = next;
+  }
+
+  function slug(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+
+  const valid = $derived(name.trim() !== '' && stages.length > 0 && stages.every((s) => s.name.trim() !== '' && (s.ownerKind === 'human' || (s.owner || s.name).trim() !== '')));
+
+  function build(): Stage[] {
+    const used = new Set<string>();
+    return stages.map((s, i) => {
+      let key = slug(s.name) || `stage-${i}`;
+      while (used.has(key)) key = `${key}-${i}`;
+      used.add(key);
+      const stage: Stage = { key, name: s.name.trim(), order: i, ownerKind: s.ownerKind };
+      if (s.ownerKind === 'capability') stage.owner = slug(s.owner) || slug(s.name);
+      if (s.gate) stage.gate = 'approval';
+      if (s.wipLimit && s.wipLimit > 0) stage.wipLimit = s.wipLimit;
+      return stage;
+    });
+  }
+
+  async function create(): Promise<void> {
+    if (!valid) return;
+    creating = true;
+    error = null;
+    try {
+      onCreated(await createBoard(name.trim(), build()));
+      name = '';
+    } catch (e) {
+      error = String(e);
+    } finally {
+      creating = false;
+    }
+  }
+</script>
+
+{#if open}
+  <div class="fixed inset-0 z-40 flex items-center justify-center p-4">
+    <button class="absolute inset-0 bg-black/55" onclick={onClose} aria-label="Close" tabindex="-1"></button>
+    <div class="bg-surface border-border drawer-in relative flex max-h-[90vh] w-full max-w-xl flex-col rounded-[12px] border shadow-2xl">
+      <div class="border-border flex items-start justify-between gap-3 border-b p-6 pb-4">
+        <div>
+          <div class="eyebrow mb-1">new board</div>
+          <h2 class="wordmark text-lg leading-snug">Design a pipeline</h2>
+        </div>
+        <button onclick={onClose} aria-label="Close" class="text-muted-foreground hover:text-foreground shrink-0">
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto p-6">
+        <input
+          bind:value={name}
+          placeholder="Board name — e.g. Launch"
+          class="bg-inset border-border focus:border-marigold w-full rounded-[7px] border px-3 py-2 text-sm outline-none"
+        />
+
+        <div class="mt-4 flex items-center gap-2">
+          <span class="eyebrow">start from</span>
+          {#each BOARD_TEMPLATES as tpl (tpl.id)}
+            <button onclick={() => seedFrom(tpl.id)} class="border-border hover:border-marigold/60 mono text-muted-foreground hover:text-foreground rounded-[6px] border px-2 py-1 text-[11px]">{tpl.name}</button>
+          {/each}
+          <button onclick={() => seedFrom('blank')} class="border-border hover:border-marigold/60 mono text-muted-foreground hover:text-foreground rounded-[6px] border px-2 py-1 text-[11px]">Blank</button>
+        </div>
+
+        <div class="eyebrow mt-5 mb-2">stages</div>
+        <div class="space-y-2">
+          {#each stages as stage, i (i)}
+            <div class="bg-inset border-border rounded-[9px] border p-2.5">
+              <div class="flex items-center gap-2">
+                <div class="flex flex-col">
+                  <button onclick={() => move(i, -1)} disabled={i === 0} aria-label="Move up" class="text-muted-foreground hover:text-foreground leading-none disabled:opacity-30"><svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M18 15l-6-6-6 6" /></svg></button>
+                  <button onclick={() => move(i, 1)} disabled={i === stages.length - 1} aria-label="Move down" class="text-muted-foreground hover:text-foreground leading-none disabled:opacity-30"><svg class="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg></button>
+                </div>
+                <input bind:value={stage.name} placeholder="Stage name" class="bg-surface border-border focus:border-marigold flex-1 rounded-[6px] border px-2.5 py-1.5 text-sm outline-none" />
+                <div class="border-border flex shrink-0 overflow-hidden rounded-[6px] border text-[11px]">
+                  <button onclick={() => (stage.ownerKind = 'capability')} class="mono px-2 py-1.5 {stage.ownerKind === 'capability' ? 'bg-marigold text-primary-foreground' : 'text-muted-foreground'}">agent</button>
+                  <button onclick={() => (stage.ownerKind = 'human')} class="mono border-border border-l px-2 py-1.5 {stage.ownerKind === 'human' ? 'bg-marigold text-primary-foreground' : 'text-muted-foreground'}">human</button>
+                </div>
+                <button onclick={() => removeStage(i)} aria-label="Remove stage" class="text-muted-foreground hover:text-coral shrink-0"><svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+              </div>
+              <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 pl-7 text-xs">
+                {#if stage.ownerKind === 'capability'}
+                  <label class="text-muted-foreground flex items-center gap-1.5">
+                    capability
+                    <input bind:value={stage.owner} placeholder={slug(stage.name) || 'e.g. research'} class="bg-surface border-border focus:border-marigold mono w-28 rounded-[5px] border px-1.5 py-0.5 text-[11px] outline-none" />
+                  </label>
+                {:else}
+                  <label class="text-muted-foreground flex items-center gap-1.5 select-none">
+                    <input type="checkbox" bind:checked={stage.gate} class="accent-coral" /> approval gate
+                  </label>
+                {/if}
+                <label class="text-muted-foreground flex items-center gap-1.5">
+                  WIP
+                  <input type="number" min="0" bind:value={stage.wipLimit} placeholder="∞" class="bg-surface border-border focus:border-marigold mono w-14 rounded-[5px] border px-1.5 py-0.5 text-[11px] outline-none" />
+                </label>
+              </div>
+            </div>
+          {/each}
+        </div>
+        <button onclick={addStage} class="text-marigold hover:bg-inset mt-2 flex w-full items-center justify-center gap-1.5 rounded-[7px] border border-dashed border-[var(--line)] px-2 py-2 text-xs">
+          <span class="text-sm leading-none">+</span> Add stage
+        </button>
+
+        {#if error}<p class="text-coral mono mt-3 text-xs">{error}</p>{/if}
+      </div>
+
+      <div class="border-border flex justify-end gap-2 border-t p-6 pt-4">
+        <Button variant="ghost" onclick={onClose}>Cancel</Button>
+        <Button onclick={create} disabled={creating || !valid}>{creating ? 'Creating…' : 'Create board'}</Button>
+      </div>
+    </div>
+  </div>
+{/if}

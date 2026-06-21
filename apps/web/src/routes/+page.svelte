@@ -29,6 +29,7 @@
     type AgentToken,
   } from '$lib/api';
   import { Button } from '$lib/components/ui/button';
+  import NewBoardDialog from '$lib/components/NewBoardDialog.svelte';
   import { cardDraggable, columnDropTarget } from '$lib/dnd';
 
   const BOARD_KEY = 'kaambaan.boardId';
@@ -43,8 +44,6 @@
   let boards = $state<BoardSummary[]>([]);
   let showBoardMenu = $state(false);
   let showNewBoard = $state(false);
-  let newBoardName = $state('');
-  let newBoardTemplate = $state(BOARD_TEMPLATES[0]!.id);
 
   // agents manager (list + mint + revoke)
   let showConnect = $state(false);
@@ -162,21 +161,6 @@
   async function switchBoard(id: string): Promise<void> {
     showBoardMenu = false;
     if (id !== boardId) await openBoard(id);
-  }
-
-  async function createNewBoard(): Promise<void> {
-    const tpl = BOARD_TEMPLATES.find((t) => t.id === newBoardTemplate) ?? BOARD_TEMPLATES[0]!;
-    if (newBoardName.trim() === '') return;
-    creating = true;
-    try {
-      await openBoard(await createBoard(newBoardName.trim(), tpl.stages));
-      showNewBoard = false;
-      newBoardName = '';
-    } catch (e) {
-      error = String(e);
-    } finally {
-      creating = false;
-    }
   }
 
   async function onDeleteBoard(id: string): Promise<void> {
@@ -492,7 +476,7 @@
                       <span class="size-1.5 shrink-0 rounded-full" style="background:{b.id === boardId ? 'var(--marigold)' : 'var(--muted)'}"></span>
                       <span class="truncate {b.id === boardId ? 'text-foreground' : 'text-muted-foreground'}">{b.name}</span>
                     </button>
-                    <button onclick={() => onDeleteBoard(b.id)} aria-label="Delete board" title="Delete board" class="text-muted-foreground hover:text-coral mr-1 px-1 opacity-0 group-hover:opacity-100">
+                    <button onclick={() => onDeleteBoard(b.id)} aria-label="Delete board" title="Delete board" class="text-muted-foreground hover:text-coral mr-1 px-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
                       <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
                     </button>
                   </div>
@@ -506,7 +490,7 @@
         </div>
       </div>
 
-      <div class="flex items-center gap-2.5">
+      <div class="flex flex-wrap items-center justify-end gap-2 sm:gap-2.5">
         <!-- live signal -->
         <span class="border-border mono inline-flex items-center gap-1.5 rounded-[7px] border px-2.5 py-1.5 text-xs">
           {#if connected}
@@ -857,7 +841,7 @@
                       {#each a.capabilities as c (c)}<span class="border-border mono text-muted-foreground rounded-[4px] border px-1 py-0.5 text-[10px]">{c}</span>{/each}
                     </div>
                   </div>
-                  <button onclick={() => onDeleteAgent(a.id)} aria-label="Revoke agent" title="Revoke agent + its token" class="text-muted-foreground hover:text-coral shrink-0 opacity-0 group-hover:opacity-100">
+                  <button onclick={() => onDeleteAgent(a.id)} aria-label="Revoke agent" title="Revoke agent + its token" class="text-muted-foreground hover:text-coral shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
                     <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
                   </button>
                 </div>
@@ -897,57 +881,12 @@
     </div>
   {/if}
 
-  <!-- new board -->
-  {#if showNewBoard}
-    <div class="fixed inset-0 z-40 flex items-center justify-center p-4">
-      <button class="absolute inset-0 bg-black/55" onclick={() => (showNewBoard = false)} aria-label="Close" tabindex="-1"></button>
-      <div class="bg-surface border-border drawer-in relative w-full max-w-lg rounded-[12px] border p-6 shadow-2xl">
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <div class="eyebrow mb-1">new board</div>
-            <h2 class="wordmark text-lg leading-snug">Create a board</h2>
-          </div>
-          <button onclick={() => (showNewBoard = false)} aria-label="Close" class="text-muted-foreground hover:text-foreground shrink-0">
-            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-          </button>
-        </div>
-
-        <input
-          bind:value={newBoardName}
-          placeholder="Board name — e.g. Launch"
-          onkeydown={(e) => {
-            if (e.key === 'Enter') createNewBoard();
-          }}
-          class="bg-inset border-border focus:border-marigold mt-4 w-full rounded-[7px] border px-3 py-2 text-sm outline-none"
-        />
-
-        <div class="eyebrow mt-5 mb-2">pipeline</div>
-        <div class="space-y-2">
-          {#each BOARD_TEMPLATES as tpl (tpl.id)}
-            <button
-              onclick={() => (newBoardTemplate = tpl.id)}
-              class="block w-full rounded-[9px] border p-3 text-left transition {newBoardTemplate === tpl.id ? 'border-marigold bg-inset' : 'border-border hover:border-border/80'}"
-            >
-              <div class="flex items-center gap-2">
-                <span class="size-3 rounded-full border" style="border-color:{newBoardTemplate === tpl.id ? 'var(--marigold)' : 'var(--line)'};background:{newBoardTemplate === tpl.id ? 'var(--marigold)' : 'transparent'}"></span>
-                <span class="text-sm font-medium">{tpl.name}</span>
-              </div>
-              <p class="text-muted-foreground mt-1.5 pl-5 text-xs leading-relaxed">{tpl.description}</p>
-              <div class="mt-2 flex flex-wrap items-center gap-1 pl-5">
-                {#each tpl.stages as s, i (s.key)}
-                  <span class="border-border mono rounded-[5px] border px-1.5 py-0.5 text-[10px] {s.ownerKind === 'capability' ? 'text-marigold' : s.gate === 'approval' ? 'text-coral' : 'text-muted-foreground'}">{s.name}</span>
-                  {#if i < tpl.stages.length - 1}<span class="text-muted-foreground" aria-hidden="true">→</span>{/if}
-                {/each}
-              </div>
-            </button>
-          {/each}
-        </div>
-
-        <div class="mt-5 flex justify-end gap-2">
-          <Button variant="ghost" onclick={() => (showNewBoard = false)}>Cancel</Button>
-          <Button onclick={createNewBoard} disabled={creating || newBoardName.trim() === ''}>{creating ? 'Creating…' : 'Create board'}</Button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <NewBoardDialog
+    open={showNewBoard}
+    onClose={() => (showNewBoard = false)}
+    onCreated={(id) => {
+      showNewBoard = false;
+      void openBoard(id);
+    }}
+  />
 </main>
