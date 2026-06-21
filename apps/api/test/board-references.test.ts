@@ -130,4 +130,52 @@ describe('BoardDO — references (docs/06)', () => {
       if (!r.ok) expect(r.code).toBe('NOT_INITIALIZED');
     });
   });
+
+  it('rejects non-http(s) url schemes (stored-XSS / SSRF guard)', async () => {
+    await runInDurableObject(stubFor('r-scheme'), async (board: BoardDO) => {
+      const cardId = await seed(board);
+      for (const url of ['javascript:alert(1)', 'data:text/html,<script>x</script>', 'ftp://h/x', 'not a url']) {
+        const r = await board.addReference({ cardId, url, provider: 'url', sourceType: 'url' });
+        expect(r.ok, url).toBe(false);
+        if (!r.ok) expect(r.code).toBe('INVALID_URL');
+      }
+      expect((await board.getState()).references).toHaveLength(0);
+    });
+  });
+
+  it('preserves provenance (addedBy) across an idempotent update', async () => {
+    await runInDurableObject(stubFor('r-prov-keep'), async (board: BoardDO) => {
+      const cardId = await seed(board);
+      const url = 'https://github.com/org/repo/pull/3';
+      await board.addReference({ cardId, url, provider: 'github', sourceType: 'pull_request', addedBy: 'user' });
+      const upd = await board.addReference({ cardId, url, provider: 'github', sourceType: 'pull_request', addedBy: 'agent' });
+      expect(upd.ok && upd.value.addedBy).toBe('user'); // provenance is durable (docs/06 §2, §6)
+    });
+  });
+
+  it('has full-replace (PUT) semantics: omitted optionals are cleared on update', async () => {
+    await runInDurableObject(stubFor('r-put'), async (board: BoardDO) => {
+      const cardId = await seed(board);
+      const url = 'https://github.com/org/repo/pull/5';
+      await board.addReference({ cardId, url, provider: 'github', sourceType: 'pull_request', title: 't', metadata: { draft: true } });
+      const upd = await board.addReference({ cardId, url, provider: 'github', sourceType: 'pull_request' });
+      expect(upd.ok).toBe(true);
+      if (upd.ok) {
+        expect(upd.value.title).toBeNull();
+        expect(upd.value.metadata).toBeNull();
+      }
+    });
+  });
+
+  it('emits reference.added then reference.updated to the live feed', async () => {
+    await runInDurableObject(stubFor('r-events'), async (board: BoardDO) => {
+      const cardId = await seed(board);
+      const url = 'https://example.com/x';
+      await board.addReference({ cardId, url, provider: 'url', sourceType: 'url' });
+      await board.addReference({ cardId, url, provider: 'url', sourceType: 'url', title: 'x' });
+      const types = (await board.getEvents()).map((e) => e.type);
+      expect(types).toContain('reference.added');
+      expect(types).toContain('reference.updated');
+    });
+  });
 });

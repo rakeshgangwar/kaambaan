@@ -65,6 +65,16 @@ describe('REST — PUT /v1/boards/:id/cards/:cardId/references', () => {
     expect(res.status).toBe(404);
   });
 
+  it('rejects a non-http(s) url with 400', async () => {
+    const { boardId, cardId } = await seedBoardCard();
+    const res = await SELF.fetch(`${base}/v1/boards/${boardId}/cards/${cardId}/references`, {
+      method: 'PUT',
+      headers: T,
+      body: JSON.stringify({ url: 'javascript:alert(document.cookie)' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('requires a tenant header', async () => {
     const { boardId, cardId } = await seedBoardCard();
     const res = await SELF.fetch(`${base}/v1/boards/${boardId}/cards/${cardId}/references`, {

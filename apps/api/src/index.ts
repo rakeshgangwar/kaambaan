@@ -38,6 +38,7 @@ function statusForCode(code: BoardErrorCode): number {
     case 'WIP_LIMIT':
       return 409;
     case 'UNKNOWN_STAGE':
+    case 'INVALID_URL':
       return 400;
     case 'CARD_NOT_FOUND':
     case 'NOT_INITIALIZED':

@@ -147,7 +147,8 @@ export type BoardErrorCode =
   | 'STALE_LEASE'
   | 'GATE_NOT_FOUND'
   | 'GATE_NOT_PENDING'
-  | 'SEPARATION_OF_DUTIES';
+  | 'SEPARATION_OF_DUTIES'
+  | 'INVALID_URL';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: BoardErrorCode; message: string };
 
@@ -402,10 +403,30 @@ export class BoardDO extends DurableObject<Env> {
       }));
   }
 
-  /** Idempotent upsert of a first-class reference, keyed on (cardId, url) (docs/06 §1). */
+  /**
+   * Idempotent upsert of a first-class reference, keyed on (cardId, url) (docs/06 §1).
+   *
+   * **Full-replace (PUT) semantics**: a re-add overwrites the mutable fields (title, subtitle,
+   * provider, sourceType, externalId, metadata, syncState) with what's supplied — omitted optionals
+   * become null. Callers (and the P5.2 sync worker) must send the complete current record. The
+   * identity fields (id, created_at, added_by) are preserved across updates.
+   *
+   * Only `http(s)` urls are accepted: a reference url renders as an outbound link in the board UI,
+   * so rejecting other schemes (`javascript:`, `data:`, …) at the write boundary forecloses stored
+   * XSS and is the first slice of the §6 SSRF allowlist.
+   */
   async addReference(input: ReferenceInput): Promise<Result<ReferenceView>> {
     if (!this.getMeta('boardId')) {
       return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    let scheme = '';
+    try {
+      scheme = new URL(input.url).protocol;
+    } catch {
+      scheme = '';
+    }
+    if (scheme !== 'http:' && scheme !== 'https:') {
+      return { ok: false, code: 'INVALID_URL', message: `unsupported reference url scheme: ${input.url}` };
     }
     if (!this.getCardRow(input.cardId)) {
       return { ok: false, code: 'CARD_NOT_FOUND', message: `card not found: ${input.cardId}` };

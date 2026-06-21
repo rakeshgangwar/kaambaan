@@ -97,6 +97,12 @@
     return board ? board.references.filter((r) => r.cardId === cardId) : [];
   }
 
+  // Defense-in-depth: the API only stores http(s) reference urls, but never emit a non-http(s)
+  // href (e.g. javascript:) even if a malformed one slips through.
+  function safeHref(url: string): string | null {
+    return /^https?:\/\//i.test(url) ? url : null;
+  }
+
   function refLabel(ref: BoardSnapshot['references'][number]): string {
     if (ref.sourceType === 'pull_request') return `PR ${ref.externalId?.split('#')[1] ? `#${ref.externalId.split('#')[1]}` : ''}`.trim();
     if (ref.sourceType === 'issue') return `Issue ${ref.externalId?.split('#')[1] ? `#${ref.externalId.split('#')[1]}` : ''}`.trim();
@@ -192,15 +198,22 @@
                 {#if refsFor(card.id).length > 0}
                   <div class="mt-1.5 flex flex-wrap gap-1">
                     {#each refsFor(card.id) as ref (ref.id)}
-                      <a
-                        href={ref.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={ref.url}
-                        class="bg-muted hover:bg-muted/70 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs"
-                      >
-                        <span>🔗</span>{refLabel(ref)}
-                      </a>
+                      {@const href = safeHref(ref.url)}
+                      {#if href}
+                        <a
+                          {href}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={ref.url}
+                          class="bg-muted hover:bg-muted/70 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs"
+                        >
+                          <span>🔗</span>{refLabel(ref)}
+                        </a>
+                      {:else}
+                        <span class="bg-muted inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs">
+                          <span>🔗</span>{refLabel(ref)}
+                        </span>
+                      {/if}
                     {/each}
                   </div>
                 {/if}
