@@ -10,7 +10,6 @@ import {
   BoardDO,
   type StageDef,
   type BoardSnapshot,
-  type BoardStub,
   type BoardErrorCode,
   type AgentActivityType,
   type GateDecision,
@@ -19,6 +18,9 @@ import {
 } from './board/board-do';
 import type { Env } from './env';
 import { newId } from './ids';
+import { boardStub } from './board/stub';
+import { handleMcpRequest } from './mcp/server';
+import { resolveBearer, unauthorized, protectedResourceMetadata, MCP_PROTECTED_RESOURCE_PATH } from './mcp/auth';
 
 export { BoardDO };
 
@@ -28,11 +30,6 @@ function tenantFrom(request: Request): string | null {
   // Browsers can't set headers on a WebSocket upgrade, so allow ?tenant= for the dev feed.
   const query = new URL(request.url).searchParams.get('tenant');
   return query && query.trim() !== '' ? query : null;
-}
-
-function boardStub(env: Env, tenantId: string, boardId: string): BoardStub {
-  // The DO name binds tenant + board, so an instance can never serve two tenants (docs/02).
-  return env.BOARD_DO.get(env.BOARD_DO.idFromName(`${tenantId}:${boardId}`)) as unknown as BoardStub;
 }
 
 function statusForCode(code: BoardErrorCode): number {
@@ -59,7 +56,17 @@ export default {
     const path = url.pathname;
 
     if (request.method === 'GET' && path === '/health') {
-      return Response.json({ ok: true, service: 'kaambaan-api', phase: 'P1' });
+      return Response.json({ ok: true, service: 'kaambaan-api', phase: 'P4' });
+    }
+
+    // MCP surface (docs/05 §2): an OAuth Resource Server in front of the Streamable HTTP endpoint.
+    if (request.method === 'GET' && path === MCP_PROTECTED_RESOURCE_PATH) {
+      return protectedResourceMetadata(request);
+    }
+    if (path === '/mcp') {
+      const auth = resolveBearer(request);
+      if (!auth) return unauthorized(request);
+      return handleMcpRequest(request, env, auth);
     }
 
     const match = path.match(/^\/v1\/boards(?:\/([^/]+))?(?:\/(.*))?$/);

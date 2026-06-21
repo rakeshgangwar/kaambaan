@@ -71,6 +71,44 @@ harness becomes a board worker.
 - We expose **tools only** (no MCP resources/prompts in v1) — matches what Claude Code / Copilot
   agents consume. **⚠️ OPEN**: expose board/card snapshots as MCP *resources* later.
 
+### Implementation (P4)
+
+The server is the official `@modelcontextprotocol/sdk` `McpServer` hosted over the SDK's
+**Web-Standard Streamable HTTP transport** (`Request`→`Response`, native to Workers) in **stateless**
+mode: every request gets a fresh server whose tools are thin RPC calls into the per-(tenant, board)
+Board DO, so the only authority is the DO and there is no MCP-session state to keep in the Worker
+(`apps/api/src/mcp/`). The tool handlers call the **same** `BoardStub` methods as the REST routes, so
+the two surfaces are one contract — proven by `apps/api/test/mcp-parity.test.ts` (MCP ≡ REST).
+
+- **Implemented tools**: `claim_card`, `get_card`, `heartbeat`, `post_activity`, `submit_for_review`,
+  `complete`, `block`, `release`, `fail`. The agent's `{tenant, agentId, capabilities}` come from the
+  token, never from tool arguments.
+- **Deferred** (noted, not yet wired): `add_reference` (no reference model until **P5**) and
+  `request_input` (MCP elicitation, rides with gate timeout/escalation in the deferred **P3.1**).
+- **Auth (P4)**: the Resource Server validates a **dev bearer** —
+  `Bearer <tenantId>:<agentId>:<comma-separated-capabilities>` — mirroring today's dev-mode
+  `X-Tenant-Id`/`X-Agent-Id` headers, and serves RFC 9728 protected-resource metadata + the `401`
+  challenge. **⚠️ OPEN**: a real Authorization Server (PKCE / dynamic registration via
+  `@cloudflare/workers-oauth-provider`) is a fast-follow; only the token resolver changes.
+- **⚠️ OPEN (P4 deferred)**: `Origin`/DNS-rebinding validation on the transport. Auth is a bearer
+  (no ambient browser session to hijack), so the risk is low; it is wired when the real AS lands
+  (`enableDnsRebindingProtection` + an allowlist derived from the deployed host).
+
+**Connect Claude Code** to a running board worker (`pnpm --filter @kaambaan/api dev`) — see
+[`apps/api/examples/claude-code.mcp.json`](../apps/api/examples/claude-code.mcp.json):
+
+```jsonc
+{
+  "mcpServers": {
+    "kaambaan": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": { "Authorization": "Bearer tnt_dev:agt_research:research,publish" }
+    }
+  }
+}
+```
+
 ## 3. REST surface
 
 The A2A **HTTP+JSON** binding semantics — the same verbs as MCP, for any language/service that
