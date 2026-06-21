@@ -78,6 +78,38 @@ export interface GateView {
   createdAt: string;
 }
 
+/** A first-class external link on a card (docs/06). Idempotent on (cardId, url). */
+export interface ReferenceView {
+  id: string;
+  cardId: string;
+  url: string;
+  title: string | null;
+  subtitle: string | null;
+  provider: string;
+  sourceType: string;
+  externalId: string | null;
+  metadata: JsonValue | null;
+  syncState: 'synced' | 'stale' | 'error';
+  lastSyncedAt: string | null;
+  addedBy: 'agent' | 'user';
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface ReferenceInput {
+  cardId: string;
+  url: string;
+  provider: string;
+  sourceType: string;
+  title?: string;
+  subtitle?: string;
+  externalId?: string;
+  metadata?: JsonValue;
+  addedBy?: 'agent' | 'user';
+  syncState?: 'synced' | 'stale' | 'error';
+  lastSyncedAt?: string;
+}
+
 export interface BoardSnapshot {
   boardId: string | null;
   tenantId: string | null;
@@ -85,6 +117,7 @@ export interface BoardSnapshot {
   stages: StageDef[];
   cards: CardView[];
   gates: GateView[];
+  references: ReferenceView[];
 }
 
 /** The outcome of an agent claim — either work to do, or nothing available (docs/04 §3). */
@@ -139,6 +172,7 @@ export interface BoardStub {
   fail(input: { runId: string; leaseEpoch: number; reason: string }): Promise<Result<CardView>>;
   release(input: { runId: string; leaseEpoch: number; reason?: string }): Promise<Result<CardView>>;
   submitForReview(input: { runId: string; leaseEpoch: number; output?: JsonValue }): Promise<Result<CardView>>;
+  addReference(input: ReferenceInput): Promise<Result<ReferenceView>>;
   resolveGate(input: {
     gateId: string;
     decision: GateDecision;
@@ -251,6 +285,28 @@ export class BoardDO extends DurableObject<Env> {
       )`,
     );
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gates_card ON gates(card_id)`);
+    // `references` is a SQL keyword, so the table is `card_references`. UNIQUE(card_id, url) is the
+    // idempotent-upsert dedup key (docs/06 §1).
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS card_references (
+        id TEXT PRIMARY KEY,
+        card_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT,
+        subtitle TEXT,
+        provider TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        external_id TEXT,
+        metadata_json TEXT,
+        sync_state TEXT NOT NULL DEFAULT 'synced',
+        last_synced_at TEXT,
+        added_by TEXT NOT NULL DEFAULT 'agent',
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        UNIQUE(card_id, url)
+      )`,
+    );
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_refs_card ON card_references(card_id)`);
   }
 
   // ----- RPC: board lifecycle -----
@@ -344,6 +400,67 @@ export class BoardDO extends DurableObject<Env> {
         payload: JSON.parse(r.payload_json as string),
         ts: r.ts as string,
       }));
+  }
+
+  /** Idempotent upsert of a first-class reference, keyed on (cardId, url) (docs/06 §1). */
+  async addReference(input: ReferenceInput): Promise<Result<ReferenceView>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    if (!this.getCardRow(input.cardId)) {
+      return { ok: false, code: 'CARD_NOT_FOUND', message: `card not found: ${input.cardId}` };
+    }
+    const now = this.now();
+    const metadataJson = input.metadata === undefined ? null : JSON.stringify(input.metadata);
+    const existing = this.sql
+      .exec(`SELECT id FROM card_references WHERE card_id = ? AND url = ?`, input.cardId, input.url)
+      .toArray()[0];
+
+    if (existing) {
+      const id = existing.id as string;
+      this.sql.exec(
+        `UPDATE card_references
+           SET title = ?, subtitle = ?, provider = ?, source_type = ?, external_id = ?,
+               metadata_json = ?, sync_state = ?, last_synced_at = ?, updated_at = ?
+         WHERE id = ?`,
+        input.title ?? null,
+        input.subtitle ?? null,
+        input.provider,
+        input.sourceType,
+        input.externalId ?? null,
+        metadataJson,
+        input.syncState ?? 'synced',
+        input.lastSyncedAt ?? null,
+        now,
+        id,
+      );
+      const ref = this.mustGetReference(id);
+      this.emit('reference.updated', { reference: ref });
+      return { ok: true, value: ref };
+    }
+
+    const id = newId('ref');
+    this.sql.exec(
+      `INSERT INTO card_references
+        (id, card_id, url, title, subtitle, provider, source_type, external_id, metadata_json, sync_state, last_synced_at, added_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      input.cardId,
+      input.url,
+      input.title ?? null,
+      input.subtitle ?? null,
+      input.provider,
+      input.sourceType,
+      input.externalId ?? null,
+      metadataJson,
+      input.syncState ?? 'synced',
+      input.lastSyncedAt ?? null,
+      input.addedBy ?? 'agent',
+      now,
+    );
+    const ref = this.mustGetReference(id);
+    this.emit('reference.added', { reference: ref });
+    return { ok: true, value: ref };
   }
 
   // ----- RPC: agent contract (docs/04) -----
@@ -829,6 +946,38 @@ export class BoardDO extends DurableObject<Env> {
     };
   }
 
+  private rowToReference(row: Row): ReferenceView {
+    return {
+      id: row.id as string,
+      cardId: row.card_id as string,
+      url: row.url as string,
+      title: (row.title as string | null) ?? null,
+      subtitle: (row.subtitle as string | null) ?? null,
+      provider: row.provider as string,
+      sourceType: row.source_type as string,
+      externalId: (row.external_id as string | null) ?? null,
+      metadata: row.metadata_json ? (JSON.parse(row.metadata_json as string) as JsonValue) : null,
+      syncState: row.sync_state as 'synced' | 'stale' | 'error',
+      lastSyncedAt: (row.last_synced_at as string | null) ?? null,
+      addedBy: row.added_by as 'agent' | 'user',
+      createdAt: row.created_at as string,
+      updatedAt: (row.updated_at as string | null) ?? null,
+    };
+  }
+
+  private mustGetReference(id: string): ReferenceView {
+    const row = this.sql.exec(`SELECT * FROM card_references WHERE id = ?`, id).toArray()[0];
+    if (!row) throw new Error(`invariant violation: reference ${id} missing immediately after write`);
+    return this.rowToReference(row);
+  }
+
+  private allReferences(): ReferenceView[] {
+    return this.sql
+      .exec(`SELECT * FROM card_references ORDER BY created_at ASC`)
+      .toArray()
+      .map((r) => this.rowToReference(r));
+  }
+
   private snapshot(): BoardSnapshot {
     const boardId = this.getMeta('boardId');
     return {
@@ -838,6 +987,7 @@ export class BoardDO extends DurableObject<Env> {
       stages: this.stages(),
       cards: boardId ? this.allCards() : [],
       gates: boardId ? this.pendingGates() : [],
+      references: boardId ? this.allReferences() : [],
     };
   }
 

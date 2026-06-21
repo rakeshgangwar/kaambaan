@@ -93,6 +93,17 @@
     return board?.gates.find((g) => g.cardId === cardId);
   }
 
+  function refsFor(cardId: string): BoardSnapshot['references'] {
+    return board ? board.references.filter((r) => r.cardId === cardId) : [];
+  }
+
+  function refLabel(ref: BoardSnapshot['references'][number]): string {
+    if (ref.sourceType === 'pull_request') return `PR ${ref.externalId?.split('#')[1] ? `#${ref.externalId.split('#')[1]}` : ''}`.trim();
+    if (ref.sourceType === 'issue') return `Issue ${ref.externalId?.split('#')[1] ? `#${ref.externalId.split('#')[1]}` : ''}`.trim();
+    if (ref.sourceType === 'repo') return ref.externalId ?? 'repo';
+    return ref.title ?? ref.sourceType;
+  }
+
   async function onResolve(gateId: string, decision: GateDecision): Promise<void> {
     if (!boardId) return;
     const res = await resolveGate(boardId, gateId, decision);
@@ -178,6 +189,21 @@
               >
                 <div class="text-sm leading-snug">{card.title}</div>
                 <div class="text-muted-foreground mt-1.5 text-xs">{card.ownerUserId}</div>
+                {#if refsFor(card.id).length > 0}
+                  <div class="mt-1.5 flex flex-wrap gap-1">
+                    {#each refsFor(card.id) as ref (ref.id)}
+                      <a
+                        href={ref.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={ref.url}
+                        class="bg-muted hover:bg-muted/70 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs"
+                      >
+                        <span>🔗</span>{refLabel(ref)}
+                      </a>
+                    {/each}
+                  </div>
+                {/if}
                 {#if gateFor(card.id)}
                   {@const gate = gateFor(card.id)!}
                   <div class="mt-2 flex flex-wrap gap-1.5">

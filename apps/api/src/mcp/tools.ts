@@ -11,6 +11,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { BoardStub, Result, JsonValue, AgentActivityType } from '../board/board-do';
+import { resolveReferenceInput } from '../references/resolve';
 
 /** The principal resolved from the bearer token (the OAuth Resource Server side, docs/05 §2). */
 export interface McpAuth {
@@ -70,6 +71,33 @@ export function registerKaambaanTools(server: McpServer, deps: ToolDeps): void {
       const card = (await deps.boardStub(boardId).getState()).cards.find((c) => c.id === cardId);
       return card ? ok(card) : fail('CARD_NOT_FOUND', `card ${cardId} not found`);
     },
+  );
+
+  server.registerTool(
+    'kaambaan_add_reference',
+    {
+      description:
+        'Attach a first-class external reference (GitHub PR/issue, repo, doc, or any url) to a card. ' +
+        'Idempotent on (card, url); a bare GitHub url is auto-recognized into provider/sourceType/externalId.',
+      inputSchema: {
+        boardId: z.string(),
+        cardId: z.string(),
+        url: z.string().min(1),
+        provider: z.string().optional(),
+        sourceType: z.string().optional(),
+        title: z.string().optional(),
+        subtitle: z.string().optional(),
+        externalId: z.string().optional(),
+        metadata: json.optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ boardId, cardId, url, provider, sourceType, title, subtitle, externalId, metadata }) =>
+      fromResult(
+        await deps.boardStub(boardId).addReference(
+          resolveReferenceInput({ cardId, url, provider, sourceType, title, subtitle, externalId, metadata, addedBy: 'agent' }),
+        ),
+      ),
   );
 
   server.registerTool(

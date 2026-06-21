@@ -31,6 +31,23 @@ attachments; the GitHub sync from GitHub's REST/GraphQL + webhooks.
 - Recognized URL shapes (GitHub PR/issue, repo) get **richer rendering and gating** (§4); a bare
   url is still a valid, generic reference (domain-agnostic — references aren't git-specific).
 
+### Implementation (P5)
+
+References live in the Board DO (`card_references`, `UNIQUE(card_id, url)`), surfaced in the board
+snapshot + live feed. `addReference` is an idempotent upsert (`apps/api/src/board/board-do.ts`).
+
+- **Surfaces**: `PUT /v1/boards/:boardId/cards/:cardId/references` (REST) and the MCP
+  `kaambaan_add_reference` tool — both call `resolveReferenceInput`, which **auto-recognizes**
+  GitHub PR/issue/repo/commit URLs into `provider`/`sourceType`/`externalId`
+  (`apps/api/src/references/`), so a caller can pass just a url. The board UI renders each as a
+  chip linking out.
+- The card-centric REST path from §3 (`PUT /v1/cards/:id/references`) is realized board-scoped for
+  now (the DO is keyed by tenant+board); a global card→board index lands with webhooks.
+- **⚠️ Deferred to P5.2**: GitHub webhook ingestion (HMAC `X-Hub-Signature-256` verify + delivery
+  dedup + a global reference→board routing index), the **draft-PR sub-state machine** (§2), the
+  **GraphQL reconciliation Workflow** (§3, the three correctness traps), and **reference-based gate
+  conditions** (§4). The reference model here is their prerequisite.
+
 ## 2. GitHub: linking & the draft-PR sub-state machine
 
 When an agent works a coding card, the **GitHub draft PR is the agent's work surface** — its

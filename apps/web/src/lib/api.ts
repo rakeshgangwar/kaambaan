@@ -39,6 +39,18 @@ export interface Gate {
 
 export type GateDecision = 'approve' | 'request_changes' | 'reject';
 
+export interface Reference {
+  id: string;
+  cardId: string;
+  url: string;
+  title?: string | null;
+  subtitle?: string | null;
+  provider: string;
+  sourceType: string;
+  externalId?: string | null;
+  addedBy: 'agent' | 'user';
+}
+
 export interface BoardSnapshot {
   boardId: string | null;
   tenantId: string | null;
@@ -46,6 +58,7 @@ export interface BoardSnapshot {
   stages: Stage[];
   cards: Card[];
   gates: Gate[];
+  references: Reference[];
 }
 
 export const DEFAULT_STAGES: Stage[] = [
