@@ -29,7 +29,7 @@ export async function handleAuthRoute(request: Request, env: Env, path: string):
   }
 
   if (path === '/auth/logout') {
-    return new Response(null, { status: request.method === 'POST' ? 204 : 302, headers: { 'Set-Cookie': sessionClearCookie(), Location: env.APP_URL ?? '/' } });
+    return new Response(null, { status: request.method === 'POST' ? 204 : 302, headers: { 'Set-Cookie': sessionClearCookie(), Location: '/' } });
   }
 
   if (path === '/auth/login') {
@@ -63,7 +63,8 @@ export async function handleAuthRoute(request: Request, env: Env, path: string):
       env.SESSION_SECRET,
     );
 
-    const headers = new Headers({ Location: env.APP_URL ?? '/' });
+    // Same-origin redirect home so it works on any domain (workers.dev or the custom domain).
+    const headers = new Headers({ Location: '/' });
     headers.append('Set-Cookie', sessionSetCookie(session, { secure: true }));
     headers.append('Set-Cookie', `${STATE_COOKIE}=; Path=/; Max-Age=0`);
     return new Response(null, { status: 302, headers });
