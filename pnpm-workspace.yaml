@@ -2,6 +2,10 @@ packages:
   - 'packages/*'
   - 'apps/*'
 allowBuilds:
+  # Optional native deps pulled transitively by the `agents` SDK; unused in the Workers runtime.
+  '@mongodb-js/zstd': false
+  core-js-pure: false
+  node-liblzma: false
   esbuild: true
   sharp: false
   workerd: true

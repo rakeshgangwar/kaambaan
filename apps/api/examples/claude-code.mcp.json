@@ -1,0 +1,14 @@
+{
+  "//": "Point Claude Code at a running Kaambaan board worker (pnpm --filter @kaambaan/api dev).",
+  "//auth": "Dev bearer = '<tenantId>:<agentId>:<comma-separated-capabilities>' (docs/05 §2).",
+  "//usage": "Copy into your project's .mcp.json, then in Claude Code the kaambaan_* tools become available.",
+  "mcpServers": {
+    "kaambaan": {
+      "type": "http",
+      "url": "http://localhost:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer tnt_dev:agt_research:research,publish"
+      }
+    }
+  }
+}
