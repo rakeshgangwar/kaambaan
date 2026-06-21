@@ -156,6 +156,12 @@ export default {
         return Response.json({ attempts: await stub.getAttempts(attemptsMatch[1]!) });
       }
 
+      // GET /v1/boards/:id/cards/:cardId/activities — session-replay timeline + handoff (docs/07 §4)
+      const cardActMatch = rest.match(/^cards\/([^/]+)\/activities$/);
+      if (cardActMatch && request.method === 'GET') {
+        return Response.json(await stub.getCardActivities(cardActMatch[1]!));
+      }
+
       // GET /v1/boards/:id/cards/:cardId/estimate — pre-run cost estimate (docs/07 §6)
       const estimateMatch = rest.match(/^cards\/([^/]+)\/estimate$/);
       if (estimateMatch && request.method === 'GET') {

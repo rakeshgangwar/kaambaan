@@ -37,6 +37,23 @@ export interface Attempt {
   profileKey: string | null;
 }
 
+export interface Activity {
+  seq: number;
+  runId: string;
+  type: string;
+  ts: string;
+  body: string | null;
+  action: string | null;
+  parameter: unknown;
+  result: unknown;
+  signal: string | null;
+}
+
+export interface CardActivities {
+  activities: Activity[];
+  handoff: Record<string, unknown> | null;
+}
+
 export interface Notification {
   seq: number;
   kind: string;
@@ -139,6 +156,13 @@ export async function getAttempts(boardId: string, cardId: string): Promise<Atte
   const res = await fetch(`/v1/boards/${boardId}/cards/${cardId}/attempts`, { headers });
   if (!res.ok) throw new Error(`getAttempts failed (${res.status})`);
   return ((await res.json()) as { attempts: Attempt[] }).attempts;
+}
+
+/** A card's session-replay timeline + carried handoff (docs/07 §4). */
+export async function getCardActivities(boardId: string, cardId: string): Promise<CardActivities> {
+  const res = await fetch(`/v1/boards/${boardId}/cards/${cardId}/activities`, { headers });
+  if (!res.ok) throw new Error(`getCardActivities failed (${res.status})`);
+  return (await res.json()) as CardActivities;
 }
 
 /** In-app notification feed (docs/07 §7). */

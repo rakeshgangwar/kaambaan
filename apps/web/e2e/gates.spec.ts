@@ -38,12 +38,12 @@ test('a human approves an agent-opened gate from the board', async ({ page, requ
   await page.goto('/');
 
   const review = page.locator('section').filter({ has: page.getByText('Review', { exact: true }) });
-  await expect(review.locator('article', { hasText: 'Launch post' })).toBeVisible();
+  await expect(review.locator('.tile', { hasText: 'Launch post' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Approve' })).toBeVisible();
 
   // 3. Approve — the card advances past the gate into Publish.
   await page.getByRole('button', { name: 'Approve' }).click();
 
   const publish = page.locator('section').filter({ has: page.getByText('Publish', { exact: true }) });
-  await expect(publish.locator('article', { hasText: 'Launch post' })).toBeVisible();
+  await expect(publish.locator('.tile', { hasText: 'Launch post' })).toBeVisible();
 });

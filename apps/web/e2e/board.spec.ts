@@ -27,13 +27,13 @@ test('moves a card to another column via drag', async ({ page }) => {
   await page.getByLabel('New card title').fill('Draggable task');
   await page.getByRole('button', { name: 'Dispatch' }).click();
 
-  const card = page.locator('article', { hasText: 'Draggable task' });
+  const card = page.locator('.tile', { hasText: 'Draggable task' });
   await expect(card).toBeVisible();
 
   const ready = page.locator('section').filter({ has: page.getByText('Ready', { exact: true }) });
   await card.dragTo(ready);
 
-  await expect(ready.locator('article', { hasText: 'Draggable task' })).toBeVisible();
+  await expect(ready.locator('.tile', { hasText: 'Draggable task' })).toBeVisible();
 });
 
 test('streams a new card to a second client in real time', async ({ browser }) => {

@@ -122,6 +122,19 @@ export interface EstimateView {
   sampleSize: number;
 }
 
+/** A durable activity in a card's session-replay timeline (docs/07 §4). */
+export interface ActivityView {
+  seq: number;
+  runId: string;
+  type: string;
+  ts: string;
+  body: string | null;
+  action: string | null;
+  parameter: JsonValue | null;
+  result: JsonValue | null;
+  signal: string | null;
+}
+
 /** One run of a card, surfaced for the attempts comparison view (docs/07 §5). */
 export interface AttemptView {
   runId: string;
@@ -301,6 +314,7 @@ export interface BoardStub {
   setBudget(input: { boardUsdCap?: number | null; cardUsdCap?: number | null }): Promise<Result<{ ok: true }>>;
   getUsage(opts?: { window?: string }): Promise<UsageSummary>;
   getAttempts(cardId: string): Promise<AttemptView[]>;
+  getCardActivities(cardId: string): Promise<{ activities: ActivityView[]; handoff: JsonValue | null }>;
   estimateCardCost(cardId: string): Promise<Result<EstimateView>>;
   getNotifications(opts?: { unreadOnly?: boolean }): Promise<NotificationView[]>;
   markNotificationRead(seq: number): Promise<Result<{ ok: true }>>;
@@ -1064,6 +1078,32 @@ export class BoardDO extends DurableObject<Env> {
       .one();
     const runs = Number(row.runs);
     return { ok: true, value: { stageKey, estimatedUsd: runs > 0 ? Number(row.cost) / runs : null, sampleSize: runs } };
+  }
+
+  /** A card's session replay: its durable activity waterfall + the handoff carried into it (docs/07 §4). */
+  async getCardActivities(cardId: string): Promise<{ activities: ActivityView[]; handoff: JsonValue | null }> {
+    const activities = this.sql
+      .exec(`SELECT * FROM activities WHERE card_id = ? AND ephemeral = 0 ORDER BY seq ASC`, cardId)
+      .toArray()
+      .map((r) => {
+        const detail = (r.detail_json ? JSON.parse(r.detail_json as string) : {}) as {
+          parameter?: JsonValue;
+          result?: JsonValue;
+          signal?: string;
+        };
+        return {
+          seq: Number(r.seq),
+          runId: r.run_id as string,
+          type: r.type as string,
+          ts: r.ts as string,
+          body: (r.body as string | null) ?? null,
+          action: (r.action as string | null) ?? null,
+          parameter: detail.parameter ?? null,
+          result: detail.result ?? null,
+          signal: detail.signal ?? null,
+        };
+      });
+    return { activities, handoff: this.parseHandoff(this.getCardHandoffJson(cardId)) };
   }
 
   /** The attempts (runs) for a card, newest-stage-first, with each run's cost and model (docs/07 §5). */
