@@ -5,6 +5,9 @@
     getBoard,
     getBoards,
     createCard,
+    updateCard,
+    deleteCard,
+    addReference,
     moveCard,
     resolveGate,
     openBoardSocket,
@@ -18,6 +21,9 @@
     getAgents,
     deleteBoard,
     deleteAgent,
+    setBudget,
+    getEstimate,
+    type Estimate,
     BOARD_TEMPLATES,
     type BoardSnapshot,
     type BoardSummary,
@@ -30,6 +36,7 @@
   } from '$lib/api';
   import { Button } from '$lib/components/ui/button';
   import NewBoardDialog from '$lib/components/NewBoardDialog.svelte';
+  import BoardSettings from '$lib/components/BoardSettings.svelte';
   import { cardDraggable, columnDropTarget } from '$lib/dnd';
 
   const BOARD_KEY = 'kaambaan.boardId';
@@ -44,6 +51,13 @@
   let boards = $state<BoardSummary[]>([]);
   let showBoardMenu = $state(false);
   let showNewBoard = $state(false);
+  let showSettings = $state(false);
+
+  // budget editor (board + per-card USD caps)
+  let showBudget = $state(false);
+  let boardCapInput = $state<number | null>(null);
+  let cardCapInput = $state<number | null>(null);
+  let savingBudget = $state(false);
 
   // agents manager (list + mint + revoke)
   let showConnect = $state(false);
@@ -68,7 +82,16 @@
   let openCardId = $state<string | null>(null);
   let cardDetail = $state<CardActivities | null>(null);
   let drawerAttempts = $state<Attempt[]>([]);
+  let cardEstimate = $state<Estimate | null>(null);
   let gateComment = $state('');
+
+  // card edit
+  let editing = $state(false);
+  let editTitle = $state('');
+  let editPriority = $state(0);
+  let editDesc = $state('');
+  let savingCard = $state(false);
+  let newRefUrl = $state('');
 
   let boardId = $state<string | null>(null);
 
@@ -102,14 +125,89 @@
     openCardId = null;
     cardDetail = null;
     drawerAttempts = [];
+    cardEstimate = null;
+    editing = false;
+    newRefUrl = '';
+  }
+
+  function startEdit(): void {
+    if (!openCard) return;
+    editTitle = openCard.title;
+    editPriority = openCard.priority;
+    editDesc = (openCard.spec?.description as string | undefined) ?? '';
+    editing = true;
+  }
+
+  async function saveCard(): Promise<void> {
+    if (!boardId || !openCardId || editTitle.trim() === '') return;
+    savingCard = true;
+    try {
+      const spec = { ...(openCard?.spec ?? {}), description: editDesc };
+      const res = await updateCard(boardId, openCardId, { title: editTitle.trim(), priority: Number(editPriority) || 0, spec });
+      if (!res.ok) error = `Couldn't save the card (${res.status})`;
+      editing = false;
+      await refresh();
+    } finally {
+      savingCard = false;
+    }
+  }
+
+  async function onDeleteCard(): Promise<void> {
+    if (!boardId || !openCardId) return;
+    if (!confirm('Delete this card and its history? This cannot be undone.')) return;
+    const res = await deleteCard(boardId, openCardId);
+    if (res.ok) {
+      closeDrawer();
+      await refresh();
+    } else {
+      error = `Couldn't delete the card (${res.status})`;
+    }
+  }
+
+  async function addRef(): Promise<void> {
+    if (!boardId || !openCardId || newRefUrl.trim() === '') return;
+    const res = await addReference(boardId, openCardId, { url: newRefUrl.trim() });
+    if (res.ok) {
+      newRefUrl = '';
+      await refresh();
+    } else {
+      error = `Couldn't add that link (${res.status})`;
+    }
   }
 
   async function refreshDrawer(): Promise<void> {
     if (!openCardId || !boardId) return;
     try {
-      [cardDetail, drawerAttempts] = await Promise.all([getCardActivities(boardId, openCardId), getAttempts(boardId, openCardId)]);
+      [cardDetail, drawerAttempts, cardEstimate] = await Promise.all([
+        getCardActivities(boardId, openCardId),
+        getAttempts(boardId, openCardId),
+        getEstimate(boardId, openCardId),
+      ]);
     } catch {
       /* drawer detail is best-effort */
+    }
+  }
+
+  // budget editor ----------------------------------------------------------
+  function openBudget(): void {
+    boardCapInput = board?.usage.budgetUsd ?? null;
+    cardCapInput = board?.usage.cardUsdCap ?? null;
+    showBudget = true;
+  }
+
+  async function saveBudget(): Promise<void> {
+    if (!boardId) return;
+    savingBudget = true;
+    try {
+      const res = await setBudget(boardId, {
+        boardUsdCap: boardCapInput && boardCapInput > 0 ? boardCapInput : null,
+        cardUsdCap: cardCapInput && cardCapInput > 0 ? cardCapInput : null,
+      });
+      if (!res.ok) error = `Couldn't save the budget (${res.status})`;
+      showBudget = false;
+      await refresh();
+    } finally {
+      savingBudget = false;
     }
   }
 
@@ -367,6 +465,8 @@
       showNotifications = false;
       showBoardMenu = false;
       showNewBoard = false;
+      showBudget = false;
+      showSettings = false;
     }
   }}
 />
@@ -481,7 +581,11 @@
                     </button>
                   </div>
                 {/each}
-                <button onclick={() => { showBoardMenu = false; showNewBoard = true; }} class="text-marigold hover:bg-muted mt-1 flex w-full items-center gap-1.5 rounded-[7px] px-2 py-1.5 text-left text-xs">
+                <button onclick={() => { showBoardMenu = false; showSettings = true; }} class="text-muted-foreground hover:text-foreground hover:bg-muted border-border/60 mt-1 flex w-full items-center gap-1.5 rounded-[7px] border-t px-2 py-1.5 text-left text-xs">
+                  <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" /></svg>
+                  Board settings
+                </button>
+                <button onclick={() => { showBoardMenu = false; showNewBoard = true; }} class="text-marigold hover:bg-muted mt-0.5 flex w-full items-center gap-1.5 rounded-[7px] px-2 py-1.5 text-left text-xs">
                   <span class="text-sm leading-none">+</span> New board
                 </button>
               </div>
@@ -500,22 +604,43 @@
           {/if}
         </span>
 
-        <!-- spend meter -->
-        <div
-          class="border-border flex items-center gap-2 rounded-[7px] border px-2.5 py-1.5"
-          title="Total agent spend{board.usage.budgetUsd !== null ? ` of a ${fmtUsd(board.usage.budgetUsd)} budget` : ''}"
-        >
-          <span class="eyebrow">spend</span>
-          <span class="mono text-xs {board.usage.overBudget ? 'text-coral' : ''}">
-            {fmtUsd(board.usage.totalCostUsd)}{#if board.usage.budgetUsd !== null}<span class="text-muted-foreground">/{fmtUsd(board.usage.budgetUsd)}</span>{/if}
-          </span>
-          {#if board.usage.budgetUsd !== null}
-            <span class="bg-muted relative h-1 w-14 overflow-hidden rounded-full">
-              <span
-                class="absolute inset-y-0 left-0 rounded-full"
-                style="width:{Math.min(100, (board.usage.totalCostUsd / board.usage.budgetUsd) * 100)}%; background:{board.usage.overBudget ? 'var(--coral)' : 'var(--marigold)'}"
-              ></span>
+        <!-- spend meter (click to set budgets) -->
+        <div class="relative">
+          <button
+            onclick={openBudget}
+            title="Set budget caps"
+            class="border-border hover:border-marigold/50 flex items-center gap-2 rounded-[7px] border px-2.5 py-1.5"
+          >
+            <span class="eyebrow">spend</span>
+            <span class="mono text-xs {board.usage.overBudget ? 'text-coral' : ''}">
+              {fmtUsd(board.usage.totalCostUsd)}{#if board.usage.budgetUsd !== null}<span class="text-muted-foreground">/{fmtUsd(board.usage.budgetUsd)}</span>{/if}
             </span>
+            {#if board.usage.budgetUsd !== null}
+              <span class="bg-muted relative h-1 w-14 overflow-hidden rounded-full">
+                <span
+                  class="absolute inset-y-0 left-0 rounded-full"
+                  style="width:{Math.min(100, (board.usage.totalCostUsd / board.usage.budgetUsd) * 100)}%; background:{board.usage.overBudget ? 'var(--coral)' : 'var(--marigold)'}"
+                ></span>
+              </span>
+            {/if}
+          </button>
+          {#if showBudget}
+            <div class="bg-card border-border absolute right-0 z-30 mt-2 w-64 rounded-[10px] border p-3 shadow-2xl max-sm:fixed max-sm:inset-x-4 max-sm:top-16 max-sm:mt-0 max-sm:w-auto">
+              <div class="eyebrow mb-2">budget caps (USD)</div>
+              <label class="mb-2 block">
+                <span class="text-muted-foreground text-xs">whole board</span>
+                <input type="number" min="0" step="0.5" bind:value={boardCapInput} placeholder="no cap" class="bg-inset border-border focus:border-marigold mono mt-1 w-full rounded-[6px] border px-2 py-1.5 text-xs outline-none" />
+              </label>
+              <label class="block">
+                <span class="text-muted-foreground text-xs">per card</span>
+                <input type="number" min="0" step="0.5" bind:value={cardCapInput} placeholder="no cap" class="bg-inset border-border focus:border-marigold mono mt-1 w-full rounded-[6px] border px-2 py-1.5 text-xs outline-none" />
+              </label>
+              <p class="text-muted-foreground mt-2 text-[11px] leading-relaxed">When spend hits a cap, agents stop being handed new work.</p>
+              <div class="mt-3 flex justify-end gap-1.5">
+                <Button size="sm" variant="ghost" onclick={() => (showBudget = false)}>Cancel</Button>
+                <Button size="sm" onclick={saveBudget} disabled={savingBudget}>{savingBudget ? 'Saving…' : 'Save'}</Button>
+              </div>
+            </div>
           {/if}
         </div>
 
@@ -532,7 +657,7 @@
             <span class="mono text-xs {unreadCount > 0 ? 'text-coral' : 'text-muted-foreground'}">{unreadCount}</span>
           </button>
           {#if showNotifications}
-            <div class="bg-card border-border absolute right-0 z-20 mt-2 w-80 rounded-[10px] border p-1.5 shadow-2xl">
+            <div class="bg-card border-border absolute right-0 z-30 mt-2 w-80 rounded-[10px] border p-1.5 shadow-2xl max-sm:fixed max-sm:inset-x-4 max-sm:top-16 max-sm:mt-0 max-sm:w-auto">
               <div class="eyebrow px-1.5 py-1">alerts</div>
               {#if notifications.length === 0}
                 <p class="text-muted-foreground px-1.5 py-2 text-sm">All clear — nothing needs you.</p>
@@ -698,25 +823,57 @@
       <button class="absolute inset-0 bg-black/55" onclick={closeDrawer} aria-label="Close drawer" tabindex="-1"></button>
       <aside class="bg-surface border-border drawer-in relative flex h-full w-full max-w-[460px] flex-col border-l shadow-2xl">
         <div class="border-border flex items-start justify-between gap-3 border-b p-4">
-          <div class="min-w-0">
-            <div class="eyebrow mb-1.5">{stageName} · {openCard.state}</div>
-            <h2 class="wordmark text-base leading-snug">{openCard.title}</h2>
-            <div class="text-muted-foreground mono mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px]">
-              <span>{openCard.ownerUserId}</span>
-              {#if openCard.costUsd > 0}<span class={openCard.overBudget ? 'text-coral' : ''}>{fmtUsd(openCard.costUsd)}</span>{/if}
-              {#if openCard.state === 'working'}<span class="inline-flex items-center gap-1.5"><span class="live-dot"></span><span style="color:var(--live)">working</span></span>{/if}
+          {#if editing}
+            <div class="min-w-0 flex-1">
+              <div class="eyebrow mb-2">edit card</div>
+              <input bind:value={editTitle} placeholder="Title" class="bg-inset border-border focus:border-marigold w-full rounded-[6px] border px-2.5 py-1.5 text-sm outline-none" />
+              <label class="text-muted-foreground mono mt-2 flex items-center gap-1.5 text-[11px]">
+                priority
+                <input type="number" bind:value={editPriority} class="bg-inset border-border focus:border-marigold w-16 rounded-[5px] border px-1.5 py-1 outline-none" />
+              </label>
+              <textarea bind:value={editDesc} rows="3" placeholder="Description / brief for the agent…" class="bg-inset border-border focus:border-marigold mt-2 w-full resize-none rounded-[6px] border px-2.5 py-2 text-xs outline-none"></textarea>
+              <div class="mt-2.5 flex gap-1.5">
+                <Button size="sm" onclick={saveCard} disabled={savingCard || editTitle.trim() === ''}>{savingCard ? 'Saving…' : 'Save'}</Button>
+                <Button size="sm" variant="ghost" onclick={() => (editing = false)}>Cancel</Button>
+              </div>
             </div>
-          </div>
-          <button onclick={closeDrawer} class="text-muted-foreground hover:text-foreground hover:bg-accent shrink-0 rounded-[7px] p-1.5" aria-label="Close">
-            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-          </button>
+          {:else}
+            <div class="min-w-0">
+              <div class="eyebrow mb-1.5">{stageName} · {openCard.state}{#if openCard.priority > 0} · P{openCard.priority}{/if}</div>
+              <h2 class="wordmark text-base leading-snug">{openCard.title}</h2>
+              <div class="text-muted-foreground mono mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px]">
+                <span>{openCard.ownerUserId}</span>
+                {#if openCard.costUsd > 0}<span class={openCard.overBudget ? 'text-coral' : ''}>{fmtUsd(openCard.costUsd)}</span>{/if}
+                {#if cardEstimate && cardEstimate.estimatedUsd !== null}
+                  <span title="Estimated cost for this stage, from {cardEstimate.sampleSize} similar run{cardEstimate.sampleSize === 1 ? '' : 's'}">~{fmtUsd(cardEstimate.estimatedUsd)} est</span>
+                {/if}
+                {#if openCard.state === 'working'}<span class="inline-flex items-center gap-1.5"><span class="live-dot"></span><span style="color:var(--live)">working</span></span>{/if}
+              </div>
+            </div>
+            <div class="flex shrink-0 items-center gap-1">
+              <button onclick={startEdit} aria-label="Edit card" title="Edit card" class="text-muted-foreground hover:text-foreground hover:bg-accent rounded-[7px] p-1.5">
+                <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+              </button>
+              <button onclick={closeDrawer} class="text-muted-foreground hover:text-foreground hover:bg-accent rounded-[7px] p-1.5" aria-label="Close">
+                <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
+            </div>
+          {/if}
         </div>
 
         <div class="flex-1 space-y-6 overflow-y-auto p-4">
-          {#if refsFor(openCard.id).length > 0}
+          {#if openCard.spec?.description}
+            {@const desc = String(openCard.spec?.description ?? '')}
             <section>
-              <div class="eyebrow mb-2">references</div>
-              <div class="flex flex-wrap gap-1.5">
+              <div class="eyebrow mb-2">description</div>
+              <p class="text-foreground/90 text-sm leading-relaxed whitespace-pre-wrap">{desc}</p>
+            </section>
+          {/if}
+
+          <section>
+            <div class="eyebrow mb-2">references</div>
+            {#if refsFor(openCard.id).length > 0}
+              <div class="mb-2.5 flex flex-wrap gap-1.5">
                 {#each refsFor(openCard.id) as ref (ref.id)}
                   {@const href = safeHref(ref.url)}
                   {@const inner = `${refLabel(ref)}${subStateLabel(ref) ? ` · ${subStateLabel(ref)}` : ''}`}
@@ -727,8 +884,19 @@
                   {/if}
                 {/each}
               </div>
-            </section>
-          {/if}
+            {/if}
+            <div class="flex gap-1.5">
+              <input
+                bind:value={newRefUrl}
+                placeholder="https://… attach a link"
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') addRef();
+                }}
+                class="bg-inset border-border focus:border-marigold flex-1 rounded-[6px] border px-2.5 py-1.5 text-xs outline-none"
+              />
+              <Button size="sm" variant="outline" onclick={addRef} disabled={newRefUrl.trim() === ''}>Add</Button>
+            </div>
+          </section>
 
           {#if cardDetail?.handoff}
             <section>
@@ -778,6 +946,10 @@
               </ol>
             {/if}
           </section>
+
+          <div class="border-border/60 border-t pt-4">
+            <button onclick={onDeleteCard} class="text-muted-foreground hover:text-coral text-xs">Delete card</button>
+          </div>
         </div>
 
         {#if openCardGate}
@@ -889,4 +1061,8 @@
       void openBoard(id);
     }}
   />
+
+  {#if board}
+    <BoardSettings open={showSettings} {board} onClose={() => (showSettings = false)} onChanged={refresh} />
+  {/if}
 </main>

@@ -24,7 +24,7 @@ import { handleMcpRequest } from './mcp/server';
 import { resolveMcpAuth, unauthorized, protectedResourceMetadata, MCP_PROTECTED_RESOURCE_PATH } from './mcp/auth';
 import { resolveUser, resolveAgent, type UserPrincipal, type AgentPrincipal } from './auth/resolve';
 import { handleAuthRoute } from './auth/routes';
-import { recordBoard, listBoards, deleteBoard, listAgents, createAgent, createAgentToken, deleteAgent } from './db/catalog';
+import { recordBoard, listBoards, renameBoard, deleteBoard, listAgents, createAgent, createAgentToken, deleteAgent } from './db/catalog';
 
 export { BoardDO };
 
@@ -161,6 +161,17 @@ export default {
         return Response.json(snapshot);
       }
 
+      // PATCH /v1/boards/:id — rename the board (DO + catalog)
+      if (rest === '' && request.method === 'PATCH') {
+        const body = (await request.json()) as { name?: string };
+        if (body.name && body.name.trim() !== '') {
+          const r = await stub.setName(body.name.trim());
+          if (!r.ok) return Response.json({ error: r }, { status: statusForCode(r.code) });
+          await renameBoard(env.DB, tenantId, boardId, body.name.trim());
+        }
+        return Response.json(await stub.getState());
+      }
+
       // DELETE /v1/boards/:id — remove the board from the workspace (catalog entry)
       if (rest === '' && request.method === 'DELETE') {
         await deleteBoard(env.DB, tenantId, boardId);
@@ -187,6 +198,20 @@ export default {
         const result = await stub.moveCard(moveMatch[1]!, body.toStageKey);
         if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
         return Response.json({ card: result.value });
+      }
+
+      // PATCH /v1/boards/:id/cards/:cardId — edit a card · DELETE — remove it
+      const cardMatch = rest.match(/^cards\/([^/]+)$/);
+      if (cardMatch && request.method === 'PATCH') {
+        const body = (await request.json()) as { title?: string; spec?: JsonValue; priority?: number };
+        const result = await stub.updateCard(cardMatch[1]!, body);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json({ card: result.value });
+      }
+      if (cardMatch && request.method === 'DELETE') {
+        const result = await stub.deleteCard(cardMatch[1]!);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return new Response(null, { status: 204 });
       }
 
       // PUT /v1/boards/:id/cards/:cardId/references — idempotent reference upsert (docs/06 §1)

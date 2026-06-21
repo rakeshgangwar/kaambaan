@@ -38,6 +38,7 @@ export interface Stage {
 export interface Card {
   id: string;
   title: string;
+  spec?: Record<string, unknown> | null;
   ownerUserId: string;
   currentStageKey: string;
   state: string;
@@ -131,6 +132,17 @@ export interface BoardSnapshot {
   gates: Gate[];
   references: Reference[];
   usage: BoardUsage;
+  github: { issueTrigger: boolean; webhookConfigured: boolean };
+}
+
+export interface Profile {
+  key: string;
+  name: string | null;
+  harness: string | null;
+  model: string | null;
+  permissionPolicy: string | null;
+  autonomyLevel: string | null;
+  capabilities: string[];
 }
 
 export const DEFAULT_STAGES: Stage[] = [
@@ -187,6 +199,21 @@ export async function createCard(boardId: string, title: string): Promise<void> 
     body: JSON.stringify({ title }), // owner is the signed-in user, set by the server
   });
   if (!res.ok) throw new Error(`createCard failed (${res.status})`);
+}
+
+/** Edit a card's title / description (spec) / priority. */
+export function updateCard(boardId: string, cardId: string, patch: { title?: string; spec?: Record<string, unknown>; priority?: number }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/cards/${cardId}`, { method: 'PATCH', headers, body: JSON.stringify(patch) });
+}
+
+/** Delete a card and everything scoped to it. */
+export function deleteCard(boardId: string, cardId: string): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/cards/${cardId}`, { method: 'DELETE', headers });
+}
+
+/** Attach a reference (link) to a card by hand. */
+export function addReference(boardId: string, cardId: string, ref: { url: string; title?: string }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/cards/${cardId}/references`, { method: 'PUT', headers, body: JSON.stringify({ ...ref, addedBy: 'user' }) });
 }
 
 /** Returns the raw response so callers can surface WIP-limit (409) and unknown-stage (400) cases. */
@@ -262,6 +289,24 @@ export async function createAgent(name: string, capabilities: string[]): Promise
   return (await res.json()) as AgentToken;
 }
 
+export interface Estimate {
+  stageKey: string;
+  estimatedUsd: number | null;
+  sampleSize: number;
+}
+
+/** Set or clear the board / per-card USD budget caps (pass null to clear). */
+export function setBudget(boardId: string, caps: { boardUsdCap?: number | null; cardUsdCap?: number | null }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/budget`, { method: 'PUT', headers, body: JSON.stringify(caps) });
+}
+
+/** Pre-run cost estimate for a card's current stage, from history (docs/07 §6). */
+export async function getEstimate(boardId: string, cardId: string): Promise<Estimate | null> {
+  const res = await fetch(`/v1/boards/${boardId}/cards/${cardId}/estimate`, { headers });
+  if (!res.ok) return null;
+  return (await res.json()) as Estimate;
+}
+
 /** The agents registered in the signed-in user's workspace. */
 export async function getAgents(): Promise<Array<{ id: string; name: string; capabilities: string[] }>> {
   const res = await fetch('/v1/agents', { headers });
@@ -269,9 +314,30 @@ export async function getAgents(): Promise<Array<{ id: string; name: string; cap
   return ((await res.json()) as { agents: Array<{ id: string; name: string; capabilities: string[] }> }).agents;
 }
 
+/** Rename a board. */
+export function renameBoard(boardId: string, name: string): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}`, { method: 'PATCH', headers, body: JSON.stringify({ name }) });
+}
+
 /** Remove a board from the workspace. */
 export function deleteBoard(boardId: string): Promise<Response> {
   return fetch(`/v1/boards/${boardId}`, { method: 'DELETE', headers });
+}
+
+/** Configure the GitHub webhook secret + issue→card trigger for a board. */
+export function setGithubConfig(boardId: string, cfg: { secret?: string; issueTrigger?: boolean }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/github`, { method: 'PUT', headers, body: JSON.stringify(cfg) });
+}
+
+/** Agent profiles configured on a board (docs/05 §7). */
+export async function getProfiles(boardId: string): Promise<Profile[]> {
+  const res = await fetch(`/v1/boards/${boardId}/profiles`, { headers });
+  if (!res.ok) throw new Error(`getProfiles failed (${res.status})`);
+  return ((await res.json()) as { profiles: Profile[] }).profiles;
+}
+
+export function createProfile(boardId: string, input: { key: string; name?: string; model?: string; capabilities?: string[] }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/profiles`, { method: 'POST', headers, body: JSON.stringify(input) });
 }
 
 /** Revoke an agent and all of its tokens. */

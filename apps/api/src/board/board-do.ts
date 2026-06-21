@@ -239,6 +239,7 @@ export interface BoardSnapshot {
   gates: GateView[];
   references: ReferenceView[];
   usage: BoardUsage;
+  github: { issueTrigger: boolean; webhookConfigured: boolean };
 }
 
 /** Board-level cost rollup + budget state (docs/07 §6). */
@@ -297,6 +298,9 @@ export interface BoardStub {
     priority?: number;
   }): Promise<Result<CardView>>;
   moveCard(cardId: string, toStageKey: string, actorUserId?: string): Promise<Result<CardView>>;
+  updateCard(cardId: string, patch: { title?: string; spec?: JsonValue; priority?: number }): Promise<Result<CardView>>;
+  deleteCard(cardId: string): Promise<Result<{ ok: true }>>;
+  setName(name: string): Promise<Result<{ ok: true }>>;
   getState(): Promise<BoardSnapshot>;
   getEvents(limit?: number): Promise<BoardEvent[]>;
   // Agent contract (docs/04 §3)
@@ -661,6 +665,54 @@ export class BoardDO extends DurableObject<Env> {
       by: actorUserId ?? null,
     });
     return { ok: true, value: updated };
+  }
+
+  /** Edit a card's title / spec / priority (human, docs/07 §4). */
+  async updateCard(cardId: string, patch: { title?: string; spec?: JsonValue; priority?: number }): Promise<Result<CardView>> {
+    if (!this.getMeta('boardId')) return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    if (!this.getCard(cardId)) return { ok: false, code: 'CARD_NOT_FOUND', message: `card not found: ${cardId}` };
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    if (patch.title !== undefined) {
+      sets.push('title = ?');
+      vals.push(patch.title);
+    }
+    if (patch.spec !== undefined) {
+      sets.push('spec_json = ?');
+      vals.push(JSON.stringify(patch.spec));
+    }
+    if (patch.priority !== undefined) {
+      sets.push('priority = ?');
+      vals.push(patch.priority);
+    }
+    if (sets.length > 0) {
+      sets.push('updated_at = ?');
+      vals.push(this.now());
+      this.sql.exec(`UPDATE cards SET ${sets.join(', ')} WHERE id = ?`, ...vals, cardId);
+    }
+    const card = this.mustGetCard(cardId);
+    this.emit('card.updated', { card });
+    return { ok: true, value: card };
+  }
+
+  /** Delete a card and everything scoped to it (references, runs, activities, gates, usage, notifications). */
+  async deleteCard(cardId: string): Promise<Result<{ ok: true }>> {
+    if (!this.getMeta('boardId')) return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    if (!this.getCard(cardId)) return { ok: false, code: 'CARD_NOT_FOUND', message: `card not found: ${cardId}` };
+    for (const t of ['usage_records', 'activities', 'runs', 'gates', 'card_references', 'notifications']) {
+      this.sql.exec(`DELETE FROM ${t} WHERE card_id = ?`, cardId);
+    }
+    this.sql.exec(`DELETE FROM cards WHERE id = ?`, cardId);
+    this.emit('card.deleted', { cardId });
+    return { ok: true, value: { ok: true } };
+  }
+
+  /** Rename the board (the catalog row is renamed alongside, by the Worker). */
+  async setName(name: string): Promise<Result<{ ok: true }>> {
+    if (!this.getMeta('boardId')) return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    this.setMeta('name', name);
+    this.emit('board.renamed', { name });
+    return { ok: true, value: { ok: true } };
   }
 
   async getState(): Promise<BoardSnapshot> {
@@ -1819,6 +1871,7 @@ export class BoardDO extends DurableObject<Env> {
       gates: boardId ? this.pendingGates() : [],
       references: boardId ? this.allReferences() : [],
       usage: boardId ? this.boardUsage() : { totalCostUsd: 0, estimatedCostUsd: 0, budgetUsd: null, cardUsdCap: null, overBudget: false },
+      github: { issueTrigger: this.getMeta('githubIssueTrigger') === '1', webhookConfigured: this.getMeta('githubWebhookSecret') !== null },
     };
   }
 
