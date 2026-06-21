@@ -21,17 +21,12 @@ import { newId } from './ids';
 import { boardStub } from './board/stub';
 import { resolveReferenceInput } from './references/resolve';
 import { handleMcpRequest } from './mcp/server';
-import { resolveBearer, unauthorized, protectedResourceMetadata, MCP_PROTECTED_RESOURCE_PATH } from './mcp/auth';
+import { resolveMcpAuth, unauthorized, protectedResourceMetadata, MCP_PROTECTED_RESOURCE_PATH } from './mcp/auth';
+import { resolveUser, resolveAgent, type UserPrincipal, type AgentPrincipal } from './auth/resolve';
+import { handleAuthRoute } from './auth/routes';
+import { recordBoard, listBoards } from './db/catalog';
 
 export { BoardDO };
-
-function tenantFrom(request: Request): string | null {
-  const header = request.headers.get('X-Tenant-Id');
-  if (header && header.trim() !== '') return header;
-  // Browsers can't set headers on a WebSocket upgrade, so allow ?tenant= for the dev feed.
-  const query = new URL(request.url).searchParams.get('tenant');
-  return query && query.trim() !== '' ? query : null;
-}
 
 function statusForCode(code: BoardErrorCode): number {
   switch (code) {
@@ -66,7 +61,13 @@ export default {
     const path = url.pathname;
 
     if (request.method === 'GET' && path === '/health') {
-      return Response.json({ ok: true, service: 'kaambaan-api', phase: 'P4' });
+      return Response.json({ ok: true, service: 'kaambaan-api', phase: 'P8' });
+    }
+
+    // Human auth (GitHub OAuth → session): /auth/login · /auth/callback · /auth/me · /auth/logout.
+    if (path.startsWith('/auth/')) {
+      const res = await handleAuthRoute(request, env, path);
+      if (res) return res;
     }
 
     // MCP surface (docs/05 §2): an OAuth Resource Server in front of the Streamable HTTP endpoint.
@@ -74,7 +75,7 @@ export default {
       return protectedResourceMetadata(request);
     }
     if (path === '/mcp') {
-      const auth = resolveBearer(request);
+      const auth = await resolveMcpAuth(request, env);
       if (!auth) return unauthorized(request);
       return handleMcpRequest(request, env, auth);
     }
@@ -82,19 +83,40 @@ export default {
     const match = path.match(/^\/v1\/boards(?:\/([^/]+))?(?:\/(.*))?$/);
     if (!match) return new Response('Not Found', { status: 404 });
 
-    const tenantId = tenantFrom(request);
-    if (!tenantId) return Response.json({ error: 'X-Tenant-Id required' }, { status: 401 });
-
     const boardId = match[1];
     const rest = match[2] ?? '';
 
+    // Resolve the caller by route type: agent routes carry a token; the GitHub webhook
+    // self-authenticates (HMAC) and carries ?tenant=; everything else is a human (session cookie).
+    const isAgentRoute = !!boardId && (rest === 'claims' || rest.startsWith('runs/'));
+    const isWebhook = !!boardId && rest === 'webhooks/github';
+    let tenantId: string;
+    let user: UserPrincipal | null = null;
+    let agent: AgentPrincipal | null = null;
+
+    if (isWebhook) {
+      const t = url.searchParams.get('tenant');
+      if (!t || t.trim() === '') return Response.json({ error: 'tenant required' }, { status: 400 });
+      tenantId = t;
+    } else if (isAgentRoute) {
+      agent = await resolveAgent(request, env);
+      if (!agent) return Response.json({ error: 'a valid agent token is required' }, { status: 401 });
+      tenantId = agent.tenantId;
+    } else {
+      user = await resolveUser(request, env);
+      if (!user) return Response.json({ error: 'sign in to continue' }, { status: 401 });
+      tenantId = user.tenantId;
+    }
+
     try {
-      // POST /v1/boards — create a board
+      // GET /v1/boards — list the workspace's boards · POST /v1/boards — create one
       if (!boardId) {
+        if (request.method === 'GET') return Response.json({ boards: await listBoards(env.DB, tenantId) });
         if (request.method !== 'POST') return Response.json({ error: 'method not allowed' }, { status: 405 });
         const body = (await request.json()) as { name: string; stages: StageDef[] };
         const id = newId('brd');
         const snapshot = await boardStub(env, tenantId, id).init({ id, tenantId, name: body.name, stages: body.stages });
+        await recordBoard(env.DB, tenantId, { id, name: body.name, stagesJson: JSON.stringify(body.stages) });
         return Response.json({ boardId: id, board: snapshot }, { status: 201 });
       }
 
@@ -110,15 +132,15 @@ export default {
         return Response.json(snapshot);
       }
 
-      // POST /v1/boards/:id/cards — create a card
+      // POST /v1/boards/:id/cards — create a card (owner defaults to the signed-in user)
       if (rest === 'cards' && request.method === 'POST') {
         const body = (await request.json()) as {
           title: string;
-          ownerUserId: string;
+          ownerUserId?: string;
           spec?: JsonValue;
           priority?: number;
         };
-        const result = await stub.createCard(body);
+        const result = await stub.createCard({ ...body, ownerUserId: body.ownerUserId ?? user?.userId ?? 'usr_dev' });
         if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
         return Response.json({ card: result.value }, { status: 201 });
       }
@@ -252,7 +274,7 @@ export default {
           spec?: JsonValue;
           source?: { url: string; provider?: string; sourceType?: string; externalId?: string; title?: string; metadata?: JsonValue };
         };
-        const result = await stub.createCardFromTrigger({ title: body.title, ownerUserId: body.ownerUserId ?? 'usr_trigger', spec: body.spec, source: body.source });
+        const result = await stub.createCardFromTrigger({ title: body.title, ownerUserId: body.ownerUserId ?? user?.userId ?? 'usr_trigger', spec: body.spec, source: body.source });
         if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
         return Response.json(result.value, { status: 201 });
       }
@@ -272,16 +294,15 @@ export default {
         return Response.json(result.value);
       }
 
-      // POST /v1/boards/:id/claims — an agent claims a ready card (docs/04 §3)
+      // POST /v1/boards/:id/claims — an agent claims a ready card (docs/04 §3). Identity + capabilities
+      // come from the agent's token; the request body only carries concurrency/profile (and, in dev,
+      // the capabilities since the dev headers don't encode them).
       if (rest === 'claims' && request.method === 'POST') {
-        const agentId = request.headers.get('X-Agent-Id');
-        if (!agentId || agentId.trim() === '') {
-          return Response.json({ error: 'X-Agent-Id required' }, { status: 400 });
-        }
+        if (!agent!.agentId) return Response.json({ error: 'an agent identity is required to claim' }, { status: 400 });
         const payload = (await request.json()) as { capabilities?: string[]; maxConcurrency?: number; profileKey?: string };
         const claimResult = await stub.claim({
-          agentId,
-          capabilities: payload.capabilities ?? [],
+          agentId: agent!.agentId,
+          capabilities: agent!.capabilities ?? payload.capabilities ?? [],
           maxConcurrency: payload.maxConcurrency,
           profileKey: payload.profileKey,
         });
@@ -346,18 +367,14 @@ export default {
         }
       }
 
-      // POST /v1/boards/:id/gates/:gateId/resolve — a human resolves an approval gate (docs/08 §6)
+      // POST /v1/boards/:id/gates/:gateId/resolve — the signed-in human resolves an approval gate (docs/08 §6)
       const gateMatch = rest.match(/^gates\/([^/]+)\/resolve$/);
       if (gateMatch && request.method === 'POST') {
-        const decidedBy = request.headers.get('X-User-Id');
-        if (!decidedBy || decidedBy.trim() === '') {
-          return Response.json({ error: 'X-User-Id required' }, { status: 400 });
-        }
         const gp = (await request.json()) as { decision: GateDecision; comment?: string };
         const result = await stub.resolveGate({
           gateId: gateMatch[1]!,
           decision: gp.decision,
-          decidedBy,
+          decidedBy: user?.userId ?? 'usr_dev',
           comment: gp.comment,
         });
         if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });

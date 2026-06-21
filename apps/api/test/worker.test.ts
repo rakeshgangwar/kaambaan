@@ -26,7 +26,7 @@ describe('Worker routing', () => {
   it('serves health', async () => {
     const res = await SELF.fetch('https://api.test/health');
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, phase: 'P4' });
+    expect(await res.json()).toMatchObject({ ok: true, phase: 'P8' });
   });
 
   it('requires a tenant header on board routes', async () => {

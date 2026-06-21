@@ -7,6 +7,9 @@
   "observability": {
     "enabled": true
   },
+  // Dev-mode auth: accept X-Tenant-Id / X-Agent-Id headers (local dev + tests). Production turns this
+  // off (`wrangler deploy --var DEV_AUTH:false`) so the deployed app requires real auth.
+  "vars": { "DEV_AUTH": "true" },
   "d1_databases": [
     {
       "binding": "DB",
