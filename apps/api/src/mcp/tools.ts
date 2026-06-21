@@ -125,10 +125,18 @@ export function registerKaambaanTools(server: McpServer, deps: ToolDeps): void {
         parameter: z.unknown().optional(),
         result: z.unknown().optional(),
         signal: z.string().optional(),
+        usage: z
+          .object({
+            model: z.string().optional(),
+            inputTokens: z.number().int().min(0).optional(),
+            outputTokens: z.number().int().min(0).optional(),
+            costUsd: z.number().min(0).optional(),
+          })
+          .optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ boardId, runId, leaseEpoch, type, ephemeral, body, action, parameter, result, signal }) =>
+    async ({ boardId, runId, leaseEpoch, type, ephemeral, body, action, parameter, result, signal, usage }) =>
       fromResult(
         await deps.boardStub(boardId).postActivity({
           runId,
@@ -140,6 +148,7 @@ export function registerKaambaanTools(server: McpServer, deps: ToolDeps): void {
           parameter: parameter as JsonValue,
           result: result as JsonValue,
           signal,
+          usage,
         }),
       ),
   );

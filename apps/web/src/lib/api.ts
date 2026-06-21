@@ -20,6 +20,16 @@ export interface Card {
   currentStageKey: string;
   state: string;
   priority: number;
+  costUsd: number;
+  overBudget: boolean;
+}
+
+export interface BoardUsage {
+  totalCostUsd: number;
+  estimatedCostUsd: number;
+  budgetUsd: number | null;
+  cardUsdCap: number | null;
+  overBudget: boolean;
 }
 
 export interface GateOption {
@@ -60,6 +70,7 @@ export interface BoardSnapshot {
   cards: Card[];
   gates: Gate[];
   references: Reference[];
+  usage: BoardUsage;
 }
 
 export const DEFAULT_STAGES: Stage[] = [

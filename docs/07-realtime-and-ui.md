@@ -118,6 +118,27 @@ Almost every local-first competitor ships **zero** cost/observability — we mak
 - **Rolling windows** (Factory's 5h/weekly/monthly) for tenant usage views. **⚠️ OPEN**: pricing
   model (pass-through vs credits) — out of scope for the spec, but the metering schema supports both.
 
+### Implementation (P6)
+
+Each agent activity may carry `usage` (`model`, `inputTokens`, `outputTokens`, `costUsd`). The Board
+DO records it in `usage_records`; cost is the reported `costUsd` or, when absent, **estimated** from
+`tokens × model pricing` (`apps/api/src/metering/pricing.ts`) and flagged `estimated` so operators
+see what's modeled vs reported. Surfaces:
+
+- **Per-card cost** (`CardView.costUsd` + `overBudget`) and a **board rollup** (`BoardSnapshot.usage`:
+  total, estimated, caps, `overBudget`) in every snapshot/live update; `GET /v1/boards/:id/usage`
+  returns the full breakdown (by model · agent · card).
+- **Budget caps** via `PUT /v1/boards/:id/budget` (`boardUsdCap`, `cardUsdCap`). A per-card cap flags
+  the card; the board cap **stops new claims** once hit (a run can't start work it can't pay for).
+- The board UI shows a `$spent / $budget` header chip and a per-card cost (red when over its cap).
+
+`usage` flows over both wires (REST `runs/:id/activities`, MCP `kaambaan_post_activity`).
+
+- **⚠️ Remaining P6 work**: AG-UI native-stream adapters (§1), the **Attempts comparison UI** (§5),
+  **rolling-window** tenant views + cross-board/tenant rollup (this slice meters within a board DO),
+  pre-run cost **estimates** shown before a stage, and **notifications** (§7, in-app/email/Slack gate
+  buttons).
+
 ## 7. Notifications
 
 Triggered by the status chips marked 🔔 above. Channels: in-app, email, and **Slack** (the proven

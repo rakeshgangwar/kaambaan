@@ -117,6 +117,16 @@ describe('MCP tools — run verbs', () => {
     return { client, ...c };
   }
 
+  it('post_activity captures usage for metering (docs/07 §6)', async () => {
+    const { client, runId, leaseEpoch } = await claimed('brd_usage');
+    await client.callTool({
+      name: 'kaambaan_post_activity',
+      arguments: { boardId: 'brd_usage', runId, leaseEpoch, type: 'action', usage: { model: 'claude-opus-4-8', inputTokens: 0, outputTokens: 0, costUsd: 0.4 } },
+    });
+    const card = (await depsFor(AUTH).boardStub('brd_usage').getState()).cards[0];
+    expect(card?.costUsd).toBeCloseTo(0.4, 6);
+  });
+
   it('heartbeat acknowledges an active lease', async () => {
     const { client, runId, leaseEpoch } = await claimed('brd_hb');
     const res = await client.callTool({ name: 'kaambaan_heartbeat', arguments: { boardId: 'brd_hb', runId, leaseEpoch } });

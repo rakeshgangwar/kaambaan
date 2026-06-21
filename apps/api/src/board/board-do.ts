@@ -4,6 +4,7 @@ import type { Env } from '../env';
 import { newId } from '../ids';
 import { verifyGithubSignature } from '../references/github-signature';
 import { mapGithubEvent } from '../references/github-events';
+import { estimateCostUsd } from '../metering/pricing';
 
 /** JSON-serializable value — used for everything that crosses the Durable Object RPC boundary. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -50,6 +51,27 @@ export interface CardView {
   contextId: string;
   createdAt: string;
   updatedAt: string | null;
+  /** Summed agent usage on this card (docs/07 §6); `overBudget` if it exceeds the per-card cap. */
+  costUsd: number;
+  overBudget: boolean;
+}
+
+/** Per-activity token/cost usage reported by an agent (docs/05 §1). */
+export interface UsageInput {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+}
+
+export interface UsageSummary {
+  totalCostUsd: number;
+  estimatedCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number }>;
+  byAgent: Array<{ agentId: string; costUsd: number }>;
+  byCard: Array<{ cardId: string; costUsd: number }>;
 }
 
 export interface BoardEvent {
@@ -120,6 +142,16 @@ export interface BoardSnapshot {
   cards: CardView[];
   gates: GateView[];
   references: ReferenceView[];
+  usage: BoardUsage;
+}
+
+/** Board-level cost rollup + budget state (docs/07 §6). */
+export interface BoardUsage {
+  totalCostUsd: number;
+  estimatedCostUsd: number;
+  budgetUsd: number | null;
+  cardUsdCap: number | null;
+  overBudget: boolean;
 }
 
 /** The outcome of an agent claim — either work to do, or nothing available (docs/04 §3). */
@@ -179,6 +211,8 @@ export interface BoardStub {
   release(input: { runId: string; leaseEpoch: number; reason?: string }): Promise<Result<CardView>>;
   submitForReview(input: { runId: string; leaseEpoch: number; output?: JsonValue }): Promise<Result<CardView>>;
   addReference(input: ReferenceInput): Promise<Result<ReferenceView>>;
+  setBudget(input: { boardUsdCap?: number | null; cardUsdCap?: number | null }): Promise<Result<{ ok: true }>>;
+  getUsage(): Promise<UsageSummary>;
   setGithubSecret(secret: string): Promise<Result<{ configured: true }>>;
   handleGithubWebhook(input: {
     rawBody: string;
@@ -205,6 +239,7 @@ export interface AgentActivityInput {
   parameter?: JsonValue;
   result?: JsonValue;
   signal?: string;
+  usage?: UsageInput;
 }
 
 type Row = Record<string, SqlStorageValue>;
@@ -281,6 +316,22 @@ export class BoardDO extends DurableObject<Env> {
         ts TEXT NOT NULL
       )`,
     );
+    // Per-activity cost/usage rollup source (docs/07 §6).
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS usage_records (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        model TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        estimated INTEGER NOT NULL DEFAULT 0,
+        ts TEXT NOT NULL
+      )`,
+    );
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_usage_card ON usage_records(card_id)`);
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS gates (
         id TEXT PRIMARY KEY,
@@ -570,6 +621,26 @@ export class BoardDO extends DurableObject<Env> {
     return { ok: true, value: { deduped: false, matched: rows.length, modeled: true } };
   }
 
+  /** Set or clear the board-level and per-card USD budget caps (docs/07 §6). `null` clears a cap. */
+  async setBudget(input: { boardUsdCap?: number | null; cardUsdCap?: number | null }): Promise<Result<{ ok: true }>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    const apply = (key: string, value: number | null | undefined): void => {
+      if (value === undefined) return;
+      if (value === null) this.sql.exec(`DELETE FROM meta WHERE k = ?`, key);
+      else this.setMeta(key, String(value));
+    };
+    apply('budgetBoardUsdCap', input.boardUsdCap);
+    apply('budgetCardUsdCap', input.cardUsdCap);
+    return { ok: true, value: { ok: true } };
+  }
+
+  /** Cost/usage rollup across this board's runs (docs/07 §6). */
+  async getUsage(): Promise<UsageSummary> {
+    return this.computeUsage();
+  }
+
   // ----- RPC: agent contract (docs/04) -----
 
   /** Atomically hand a ready, capability-matched card to an agent, within its concurrency limit. */
@@ -579,6 +650,8 @@ export class BoardDO extends DurableObject<Env> {
     maxConcurrency?: number;
   }): Promise<ClaimResult> {
     if (!this.getMeta('boardId')) return { claimed: false };
+    // Budget cap (docs/07 §6): once the board hits its USD ceiling, stop handing out new work.
+    if (this.boardOverBudget()) return { claimed: false };
     const max = input.maxConcurrency ?? 1;
     const active = Number(
       this.sql.exec(`SELECT COUNT(*) AS n FROM runs WHERE agent_id = ? AND status = 'working'`, input.agentId).one().n,
@@ -662,6 +735,25 @@ export class BoardDO extends DurableObject<Env> {
       detail,
       now,
     );
+    // Metering (docs/07 §6): record token/cost usage, estimating cost when the agent doesn't report it.
+    if (input.usage) {
+      const u = input.usage;
+      const reported = u.costUsd !== undefined;
+      const cost = reported ? u.costUsd! : estimateCostUsd(u);
+      this.sql.exec(
+        `INSERT INTO usage_records (run_id, card_id, agent_id, model, input_tokens, output_tokens, cost_usd, estimated, ts)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        input.runId,
+        cardId,
+        run.agent_id as string,
+        u.model ?? null,
+        u.inputTokens ?? 0,
+        u.outputTokens ?? 0,
+        cost,
+        reported ? 0 : 1,
+        now,
+      );
+    }
     // An activity is also a sign of life — it keeps the lease fresh.
     this.sql.exec(`UPDATE runs SET last_heartbeat_ms = ? WHERE id = ?`, this.nowMs(), input.runId);
     let cardState: TaskState = 'working';
@@ -1038,8 +1130,11 @@ export class BoardDO extends DurableObject<Env> {
   }
 
   private rowToCard(row: Row): CardView {
+    const id = row.id as string;
+    const costUsd = this.cardCost(id);
+    const cardCap = this.budgetCap('budgetCardUsdCap');
     return {
-      id: row.id as string,
+      id,
       title: row.title as string,
       spec: JSON.parse(row.spec_json as string),
       ownerUserId: row.owner_user_id as string,
@@ -1050,6 +1145,8 @@ export class BoardDO extends DurableObject<Env> {
       contextId: row.context_id as string,
       createdAt: row.created_at as string,
       updatedAt: (row.updated_at as string | null) ?? null,
+      costUsd,
+      overBudget: cardCap !== null && costUsd > cardCap,
     };
   }
 
@@ -1085,6 +1182,62 @@ export class BoardDO extends DurableObject<Env> {
       .map((r) => this.rowToReference(r));
   }
 
+  // ----- metering (docs/07 §6) -----
+
+  private cardCost(cardId: string): number {
+    return Number(this.sql.exec(`SELECT COALESCE(SUM(cost_usd), 0) AS c FROM usage_records WHERE card_id = ?`, cardId).one().c);
+  }
+
+  private boardCost(): number {
+    return Number(this.sql.exec(`SELECT COALESCE(SUM(cost_usd), 0) AS c FROM usage_records`).one().c);
+  }
+
+  private budgetCap(key: 'budgetBoardUsdCap' | 'budgetCardUsdCap'): number | null {
+    const v = this.getMeta(key);
+    return v === null ? null : Number(v);
+  }
+
+  private boardOverBudget(): boolean {
+    const cap = this.budgetCap('budgetBoardUsdCap');
+    return cap !== null && this.boardCost() >= cap;
+  }
+
+  private computeUsage(): UsageSummary {
+    const totals = this.sql
+      .exec(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS cost,
+                COALESCE(SUM(CASE WHEN estimated = 1 THEN cost_usd ELSE 0 END), 0) AS est,
+                COALESCE(SUM(input_tokens), 0) AS itok,
+                COALESCE(SUM(output_tokens), 0) AS otok
+         FROM usage_records`,
+      )
+      .one();
+    const byModel = this.sql
+      .exec(
+        `SELECT COALESCE(model, '(unknown)') AS model, SUM(cost_usd) AS cost, SUM(input_tokens) AS itok, SUM(output_tokens) AS otok
+         FROM usage_records GROUP BY model ORDER BY cost DESC`,
+      )
+      .toArray()
+      .map((r) => ({ model: r.model as string, costUsd: Number(r.cost), inputTokens: Number(r.itok), outputTokens: Number(r.otok) }));
+    const byAgent = this.sql
+      .exec(`SELECT agent_id, SUM(cost_usd) AS cost FROM usage_records GROUP BY agent_id ORDER BY cost DESC`)
+      .toArray()
+      .map((r) => ({ agentId: r.agent_id as string, costUsd: Number(r.cost) }));
+    const byCard = this.sql
+      .exec(`SELECT card_id, SUM(cost_usd) AS cost FROM usage_records GROUP BY card_id ORDER BY cost DESC`)
+      .toArray()
+      .map((r) => ({ cardId: r.card_id as string, costUsd: Number(r.cost) }));
+    return {
+      totalCostUsd: Number(totals.cost),
+      estimatedCostUsd: Number(totals.est),
+      totalInputTokens: Number(totals.itok),
+      totalOutputTokens: Number(totals.otok),
+      byModel,
+      byAgent,
+      byCard,
+    };
+  }
+
   private snapshot(): BoardSnapshot {
     const boardId = this.getMeta('boardId');
     return {
@@ -1095,6 +1248,19 @@ export class BoardDO extends DurableObject<Env> {
       cards: boardId ? this.allCards() : [],
       gates: boardId ? this.pendingGates() : [],
       references: boardId ? this.allReferences() : [],
+      usage: boardId ? this.boardUsage() : { totalCostUsd: 0, estimatedCostUsd: 0, budgetUsd: null, cardUsdCap: null, overBudget: false },
+    };
+  }
+
+  private boardUsage(): BoardUsage {
+    const u = this.computeUsage();
+    const boardCap = this.budgetCap('budgetBoardUsdCap');
+    return {
+      totalCostUsd: u.totalCostUsd,
+      estimatedCostUsd: u.estimatedCostUsd,
+      budgetUsd: boardCap,
+      cardUsdCap: this.budgetCap('budgetCardUsdCap'),
+      overBudget: boardCap !== null && u.totalCostUsd > boardCap,
     };
   }
 

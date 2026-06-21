@@ -127,6 +127,10 @@
     return ref.title ?? ref.sourceType;
   }
 
+  function fmtUsd(n: number): string {
+    return `$${n.toFixed(2)}`;
+  }
+
   async function onResolve(gateId: string, decision: GateDecision): Promise<void> {
     if (!boardId) return;
     const res = await resolveGate(boardId, gateId, decision);
@@ -149,13 +153,23 @@
       <h1 class="text-xl font-bold">
         Kaambaan <span class="text-muted-foreground font-normal">/ {board.name}</span>
       </h1>
-      <span
-        class="rounded-full border px-2 py-0.5 text-xs {connected
-          ? 'border-emerald-500/40 text-emerald-400'
-          : 'text-muted-foreground'}"
-      >
-        {connected ? '● live' : '○ offline'}
-      </span>
+      <div class="flex items-center gap-2">
+        <span
+          title="Total agent cost{board.usage.budgetUsd !== null ? ` of a ${fmtUsd(board.usage.budgetUsd)} budget` : ''}"
+          class="rounded-full border px-2 py-0.5 text-xs {board.usage.overBudget
+            ? 'border-destructive/50 text-destructive'
+            : 'text-muted-foreground'}"
+        >
+          {fmtUsd(board.usage.totalCostUsd)}{board.usage.budgetUsd !== null ? ` / ${fmtUsd(board.usage.budgetUsd)}` : ''}
+        </span>
+        <span
+          class="rounded-full border px-2 py-0.5 text-xs {connected
+            ? 'border-emerald-500/40 text-emerald-400'
+            : 'text-muted-foreground'}"
+        >
+          {connected ? '● live' : '○ offline'}
+        </span>
+      </div>
     </header>
 
     <form class="mt-4 flex gap-2" onsubmit={onAdd}>
@@ -211,7 +225,14 @@
                 class="bg-background cursor-grab rounded-lg border p-2.5 transition-opacity active:cursor-grabbing"
               >
                 <div class="text-sm leading-snug">{card.title}</div>
-                <div class="text-muted-foreground mt-1.5 text-xs">{card.ownerUserId}</div>
+                <div class="text-muted-foreground mt-1.5 flex items-center justify-between text-xs">
+                  <span>{card.ownerUserId}</span>
+                  {#if card.costUsd > 0}
+                    <span title="Agent cost on this card" class={card.overBudget ? 'text-destructive font-medium' : ''}>
+                      {fmtUsd(card.costUsd)}
+                    </span>
+                  {/if}
+                </div>
                 {#if refsFor(card.id).length > 0}
                   <div class="mt-1.5 flex flex-wrap gap-1">
                     {#each refsFor(card.id) as ref (ref.id)}

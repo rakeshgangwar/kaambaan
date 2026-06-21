@@ -147,6 +147,19 @@ export default {
         return Response.json({ reference: result.value });
       }
 
+      // GET /v1/boards/:id/usage — cost/usage rollup (docs/07 §6)
+      if (rest === 'usage' && request.method === 'GET') {
+        return Response.json(await stub.getUsage());
+      }
+
+      // PUT /v1/boards/:id/budget — set/clear USD budget caps (docs/07 §6)
+      if (rest === 'budget' && request.method === 'PUT') {
+        const body = (await request.json()) as { boardUsdCap?: number | null; cardUsdCap?: number | null };
+        const result = await stub.setBudget(body);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value);
+      }
+
       // PUT /v1/boards/:id/github — configure the board's GitHub webhook secret (docs/06 §3)
       if (rest === 'github' && request.method === 'PUT') {
         const body = (await request.json()) as { secret: string };
@@ -202,6 +215,7 @@ export default {
           handoff?: JsonValue;
           output?: JsonValue;
           reason?: string;
+          usage?: { model?: string; inputTokens?: number; outputTokens?: number; costUsd?: number };
         };
         const respond = (r: Result<unknown>, key: string): Response =>
           r.ok
@@ -223,6 +237,7 @@ export default {
                 parameter: p.parameter,
                 result: p.result,
                 signal: p.signal,
+                usage: p.usage,
               }),
               'activity',
             );
