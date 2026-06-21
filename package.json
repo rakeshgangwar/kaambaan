@@ -1,6 +1,6 @@
 {
   "name": "kaambaan",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "A multi-tenant Kanban board that orchestrates external AI agents through pipeline stages with human approval gates.",
   "packageManager": "pnpm@11.5.2",
