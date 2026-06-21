@@ -4,6 +4,19 @@ Kaambaan deploys as **one Worker** that serves both the API (`/v1`, `/auth`, `/m
 the web SPA (static assets, same-origin). Same-origin means the session cookie and the app's relative
 `fetch`es just work — no CORS, no cross-site cookies.
 
+## Continuous deploy (the normal path)
+
+Merging to `main` auto-deploys. The `deploy` job in `.github/workflows/ci.yml` runs after the `test`
+and `e2e` jobs pass on a push to `main`: it migrates the remote D1 and runs `wrangler deploy
+--var DEV_AUTH:false`. It needs one repo secret:
+
+- **`CLOUDFLARE_API_TOKEN`** — a Cloudflare API token with **Workers Scripts: Edit** and **D1: Edit**,
+  scoped to your account (a single-account token lets wrangler infer the account). Add it under
+  *Settings → Secrets and variables → Actions*.
+
+So the day-to-day flow is: open a PR → tests run → merge → it builds, migrates, and ships to
+kaambaan.dev automatically. The manual steps below are only for first-time setup or one-off deploys.
+
 ## Prerequisites (you)
 
 1. **Authenticate wrangler** (interactive):

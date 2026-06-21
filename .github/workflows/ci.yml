@@ -32,3 +32,30 @@ jobs:
       - run: pnpm --filter @kaambaan/web exec playwright install --with-deps chromium
       # Boots wrangler dev (:8787) + the SvelteKit dev server (:5173) via Playwright's webServer.
       - run: pnpm --filter @kaambaan/web e2e
+
+  # Continuous deploy: after tests pass on a push to main, migrate the remote D1 + ship to Cloudflare.
+  # Needs a CLOUDFLARE_API_TOKEN repo secret (Workers Scripts: Edit · D1: Edit, scoped to your account).
+  deploy:
+    needs: [test, e2e]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://kaambaan.dev
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Apply any new catalog migrations to the remote D1 (idempotent), then build the web + deploy
+      # the Worker with real auth (DEV_AUTH off).
+      - run: pnpm --filter @kaambaan/api db:migrate
+      - run: pnpm --filter @kaambaan/api run deploy
