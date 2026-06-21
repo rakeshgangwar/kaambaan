@@ -128,8 +128,12 @@ see what's modeled vs reported. Surfaces:
 - **Per-card cost** (`CardView.costUsd` + `overBudget`) and a **board rollup** (`BoardSnapshot.usage`:
   total, estimated, caps, `overBudget`) in every snapshot/live update; `GET /v1/boards/:id/usage`
   returns the full breakdown (by model · agent · card).
-- **Budget caps** via `PUT /v1/boards/:id/budget` (`boardUsdCap`, `cardUsdCap`). A per-card cap flags
-  the card; the board cap **stops new claims** once hit (a run can't start work it can't pay for).
+- **Budget caps** via `PUT /v1/boards/:id/budget` (`boardUsdCap`, `cardUsdCap`). Enforced two ways:
+  the board cap **stops new claims** (a run can't start work it can't pay for), and once a cap is hit
+  `postActivity` **rejects further billable activities** (`BUDGET_EXCEEDED`) so an in-flight run can't
+  blow past the ceiling — overrun is bounded to the single activity that crossed it. A per-card cap
+  also flags the card red. (Caps are a coarse dollar gate, not exact billing — see the `cost_usd REAL`
+  note.) Invalid `usage` (negative/non-finite) is rejected at the DO so every wire shares the guard.
 - The board UI shows a `$spent / $budget` header chip and a per-card cost (red when over its cap).
 
 `usage` flows over both wires (REST `runs/:id/activities`, MCP `kaambaan_post_activity`).

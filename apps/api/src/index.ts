@@ -40,7 +40,10 @@ function statusForCode(code: BoardErrorCode): number {
     case 'UNKNOWN_STAGE':
     case 'INVALID_URL':
     case 'INVALID_DELIVERY':
+    case 'INVALID_USAGE':
       return 400;
+    case 'BUDGET_EXCEEDED':
+      return 402; // Payment Required — the board/card budget cap was reached
     case 'CARD_NOT_FOUND':
     case 'NOT_INITIALIZED':
     case 'GATE_NOT_FOUND':

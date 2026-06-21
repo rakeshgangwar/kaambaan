@@ -69,6 +69,8 @@ export interface UsageSummary {
   estimatedCostUsd: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  /** Activities we metered but couldn't price (estimated, $0) — so unpriced spend isn't invisible. */
+  unpricedRecords: number;
   byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number }>;
   byAgent: Array<{ agentId: string; costUsd: number }>;
   byCard: Array<{ cardId: string; costUsd: number }>;
@@ -185,7 +187,9 @@ export type BoardErrorCode =
   | 'INVALID_URL'
   | 'INVALID_SIGNATURE'
   | 'NOT_CONFIGURED'
-  | 'INVALID_DELIVERY';
+  | 'INVALID_DELIVERY'
+  | 'INVALID_USAGE'
+  | 'BUDGET_EXCEEDED';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: BoardErrorCode; message: string };
 
@@ -316,7 +320,8 @@ export class BoardDO extends DurableObject<Env> {
         ts TEXT NOT NULL
       )`,
     );
-    // Per-activity cost/usage rollup source (docs/07 §6).
+    // Per-activity cost/usage rollup source (docs/07 §6). `cost_usd` is REAL — fine for display and a
+    // coarse dollar budget gate; migrate to integer micro-dollars if we ever pass-through-bill.
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS usage_records (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -717,6 +722,19 @@ export class BoardDO extends DurableObject<Env> {
     const run = this.getActiveRunRow(input.runId, input.leaseEpoch);
     if (!run) return this.staleLease();
     const cardId = run.card_id as string;
+    if (input.usage) {
+      // Validate at the DO so every wire (REST + MCP) shares the guarantee — a negative/NaN cost
+      // would otherwise poison the SUMs the budget gate relies on.
+      const { inputTokens, outputTokens, costUsd } = input.usage;
+      const bad = [inputTokens, outputTokens, costUsd].some((n) => n !== undefined && (!Number.isFinite(n) || (n as number) < 0));
+      if (bad) return { ok: false, code: 'INVALID_USAGE', message: 'usage tokens/cost must be finite and non-negative' };
+      // Budget enforcement (docs/07 §6): once a cap is hit, reject further billable activities so an
+      // in-flight run can't blow past the ceiling — overrun is bounded to the single crossing activity.
+      const cardCap = this.budgetCap('budgetCardUsdCap');
+      if (this.boardOverBudget() || (cardCap !== null && this.cardCost(cardId) >= cardCap)) {
+        return { ok: false, code: 'BUDGET_EXCEEDED', message: 'budget cap reached for this board/card' };
+      }
+    }
     const now = this.now();
     const detail = JSON.stringify({
       parameter: input.parameter ?? null,
@@ -735,7 +753,8 @@ export class BoardDO extends DurableObject<Env> {
       detail,
       now,
     );
-    // Metering (docs/07 §6): record token/cost usage, estimating cost when the agent doesn't report it.
+    // Metering (docs/07 §6): record token/cost usage, estimating cost when the agent doesn't report
+    // it. Recorded even for ephemeral activities — an ephemeral "thinking" step still burned tokens.
     if (input.usage) {
       const u = input.usage;
       const reported = u.costUsd !== undefined;
@@ -1146,7 +1165,9 @@ export class BoardDO extends DurableObject<Env> {
       createdAt: row.created_at as string,
       updatedAt: (row.updated_at as string | null) ?? null,
       costUsd,
-      overBudget: cardCap !== null && costUsd > cardCap,
+      // `>=` matches the enforcement gate (postActivity rejects once at/over the cap), so the red
+      // chip appears exactly when billing stops.
+      overBudget: cardCap !== null && costUsd >= cardCap,
     };
   }
 
@@ -1212,6 +1233,9 @@ export class BoardDO extends DurableObject<Env> {
          FROM usage_records`,
       )
       .one();
+    const unpriced = this.sql
+      .exec(`SELECT COUNT(*) AS n FROM usage_records WHERE estimated = 1 AND cost_usd = 0`)
+      .one();
     const byModel = this.sql
       .exec(
         `SELECT COALESCE(model, '(unknown)') AS model, SUM(cost_usd) AS cost, SUM(input_tokens) AS itok, SUM(output_tokens) AS otok
@@ -1232,6 +1256,7 @@ export class BoardDO extends DurableObject<Env> {
       estimatedCostUsd: Number(totals.est),
       totalInputTokens: Number(totals.itok),
       totalOutputTokens: Number(totals.otok),
+      unpricedRecords: Number(unpriced.n),
       byModel,
       byAgent,
       byCard,
@@ -1260,7 +1285,7 @@ export class BoardDO extends DurableObject<Env> {
       estimatedCostUsd: u.estimatedCostUsd,
       budgetUsd: boardCap,
       cardUsdCap: this.budgetCap('budgetCardUsdCap'),
-      overBudget: boardCap !== null && u.totalCostUsd > boardCap,
+      overBudget: boardCap !== null && u.totalCostUsd >= boardCap, // consistent with the claim/billing gate
     };
   }
 

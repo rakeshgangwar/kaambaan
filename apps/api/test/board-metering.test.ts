@@ -95,4 +95,44 @@ describe('BoardDO — metering & budgets (docs/07 §6)', () => {
       expect(snap.usage.budgetUsd).toBe(1);
     });
   });
+
+  it('rejects invalid usage (negative or non-finite cost)', async () => {
+    await runInDurableObject(stubFor('m-invalid'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_inv', tenantId: 'tnt_a', name: 'I', stages: PIPELINE });
+      const { runId, leaseEpoch } = await claimCard(board);
+      const r = await board.postActivity({ runId, leaseEpoch, type: 'action', usage: { costUsd: -5 } });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.code).toBe('INVALID_USAGE');
+    });
+  });
+
+  it('stops an in-flight run from billing past its per-card cap', async () => {
+    await runInDurableObject(stubFor('m-inflight'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_if', tenantId: 'tnt_a', name: 'IF', stages: PIPELINE });
+      await board.setBudget({ cardUsdCap: 1 });
+      const { runId, leaseEpoch } = await claimCard(board);
+      // The activity that crosses the cap is allowed (overrun bounded to one activity)…
+      const crossing = await board.postActivity({ runId, leaseEpoch, type: 'action', usage: { costUsd: 1.5 } });
+      expect(crossing.ok).toBe(true);
+      // …the next billable activity is rejected.
+      const over = await board.postActivity({ runId, leaseEpoch, type: 'action', usage: { costUsd: 0.5 } });
+      expect(over.ok).toBe(false);
+      if (!over.ok) expect(over.code).toBe('BUDGET_EXCEEDED');
+    });
+  });
+
+  it('resumes claims after the board cap is cleared', async () => {
+    await runInDurableObject(stubFor('m-resume'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_rs', tenantId: 'tnt_a', name: 'RS', stages: PIPELINE });
+      await board.setBudget({ boardUsdCap: 1 });
+      const a = await claimCard(board, 'A');
+      await board.postActivity({ runId: a.runId, leaseEpoch: a.leaseEpoch, type: 'action', usage: { costUsd: 2 } });
+      await board.complete({ runId: a.runId, leaseEpoch: a.leaseEpoch });
+      await board.createCard({ title: 'B', ownerUserId: 'usr_a' });
+
+      expect((await board.claim({ agentId: 'agt_b', capabilities: ['build'] })).claimed).toBe(false);
+      await board.setBudget({ boardUsdCap: null }); // clear the cap
+      expect((await board.claim({ agentId: 'agt_b', capabilities: ['build'] })).claimed).toBe(true);
+    });
+  });
 });
