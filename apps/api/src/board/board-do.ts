@@ -314,7 +314,7 @@ export interface BoardStub {
     ownerUserId: string;
     spec?: JsonValue;
     source?: { url: string; provider?: string; sourceType?: string; externalId?: string; title?: string; metadata?: JsonValue };
-  }): Promise<Result<{ card: CardView; reference: ReferenceView | null }>>;
+  }): Promise<Result<{ card: CardView; reference: ReferenceView | null; referenceError?: string }>>;
   handleGithubWebhook(input: {
     rawBody: string;
     signature: string | null;
@@ -595,10 +595,11 @@ export class BoardDO extends DurableObject<Env> {
     ownerUserId: string;
     spec?: JsonValue;
     source?: { url: string; provider?: string; sourceType?: string; externalId?: string; title?: string; metadata?: JsonValue };
-  }): Promise<Result<{ card: CardView; reference: ReferenceView | null }>> {
+  }): Promise<Result<{ card: CardView; reference: ReferenceView | null; referenceError?: string }>> {
     const created = await this.createCard({ title: input.title, ownerUserId: input.ownerUserId, spec: input.spec });
     if (!created.ok) return { ok: false, code: created.code, message: created.message };
     let reference: ReferenceView | null = null;
+    let referenceError: string | undefined;
     if (input.source) {
       const ref = await this.addReference({
         cardId: created.value.id,
@@ -610,9 +611,12 @@ export class BoardDO extends DurableObject<Env> {
         metadata: input.source.metadata,
         addedBy: 'agent',
       });
+      // The card is created either way; surface a dropped reference (e.g. a bad source url) so the
+      // caller knows provenance was not attached, rather than silently returning an unprovenanced card.
       if (ref.ok) reference = ref.value;
+      else referenceError = ref.code;
     }
-    return { ok: true, value: { card: created.value, reference } };
+    return { ok: true, value: { card: created.value, reference, ...(referenceError ? { referenceError } : {}) } };
   }
 
   /** Human move (docs/03). Enforces stage existence and the target stage's WIP limit. */
@@ -806,16 +810,17 @@ export class BoardDO extends DurableObject<Env> {
       const issue = p.issue as Record<string, any> | undefined;
       const fullName = (p.repository as Record<string, any> | undefined)?.full_name as string | undefined;
       if (issue && typeof issue.number === 'number' && fullName) {
-        await this.createCardFromTrigger({
-          title: (issue.title as string) ?? `Issue #${issue.number}`,
-          ownerUserId: 'usr_github',
-          source: {
-            url: issue.html_url as string,
-            provider: 'github',
-            sourceType: 'issue',
-            externalId: `${fullName.toLowerCase()}#${issue.number}`,
-          },
-        });
+        const externalId = `${fullName.toLowerCase()}#${issue.number}`;
+        // Idempotency: don't create a second card if one already references this issue (a redelivery
+        // with a fresh delivery-id, or a re-opened issue, would otherwise duplicate).
+        const exists = this.sql.exec(`SELECT 1 FROM card_references WHERE external_id = ? LIMIT 1`, externalId).toArray()[0];
+        if (!exists) {
+          await this.createCardFromTrigger({
+            title: (issue.title as string) ?? `Issue #${issue.number}`,
+            ownerUserId: 'usr_github',
+            source: { url: issue.html_url as string, provider: 'github', sourceType: 'issue', externalId },
+          });
+        }
       }
     }
 
@@ -996,9 +1001,10 @@ export class BoardDO extends DurableObject<Env> {
       if (outcome.ok) sent++;
       else failed++;
     }
-    // Bound the queue: keep only the most recent delivered rows (the pending/failed ones stay).
+    // Bound the queue: keep only the most recent terminal rows (sent + dead-lettered); pending/failed
+    // (still-retrying) rows are always kept.
     this.sql.exec(
-      `DELETE FROM push_deliveries WHERE status = 'sent' AND id NOT IN (SELECT id FROM push_deliveries WHERE status = 'sent' ORDER BY id DESC LIMIT 100)`,
+      `DELETE FROM push_deliveries WHERE status IN ('sent', 'dead') AND id NOT IN (SELECT id FROM push_deliveries WHERE status IN ('sent', 'dead') ORDER BY id DESC LIMIT 100)`,
     );
     return { sent, failed };
   }

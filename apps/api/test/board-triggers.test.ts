@@ -49,6 +49,35 @@ describe('BoardDO — inbound triggers (docs/05 §6)', () => {
     });
   });
 
+  it('does not create a duplicate card when the same issue is delivered again', async () => {
+    await runInDurableObject(stubFor('tr-dup'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_dup', tenantId: 'tnt_a', name: 'DUP', stages: PIPE });
+      await board.setGithubConfig({ secret: 'hook', issueTrigger: true });
+      const body = JSON.stringify({
+        action: 'opened',
+        issue: { number: 12, title: 'Login is broken', state: 'open', html_url: 'https://github.com/org/repo/issues/12' },
+        repository: { full_name: 'org/repo' },
+      });
+      const sig = await githubSignatureHeader('hook', body);
+      await board.handleGithubWebhook({ rawBody: body, signature: sig, deliveryId: 'd1', event: 'issues' });
+      await board.handleGithubWebhook({ rawBody: body, signature: sig, deliveryId: 'd2', event: 'issues' }); // fresh delivery, same issue
+      expect((await board.getState()).cards).toHaveLength(1);
+    });
+  });
+
+  it('creates the card but reports a dropped reference on a bad source url', async () => {
+    await runInDurableObject(stubFor('tr-badsrc'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_bs', tenantId: 'tnt_a', name: 'BS', stages: PIPE });
+      const r = await board.createCardFromTrigger({ title: 'x', ownerUserId: 'usr_a', source: { url: 'javascript:alert(1)' } });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.value.reference).toBeNull();
+        expect(r.value.referenceError).toBe('INVALID_URL');
+      }
+      expect((await board.getState()).cards).toHaveLength(1); // the card is still created
+    });
+  });
+
   it('does not create a card from an issue when the trigger is off', async () => {
     await runInDurableObject(stubFor('tr-off'), async (board: BoardDO) => {
       await board.init({ id: 'brd_off', tenantId: 'tnt_a', name: 'OFF', stages: PIPE });
