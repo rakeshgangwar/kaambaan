@@ -16,6 +16,8 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 const HEARTBEAT_TIMEOUT_MS = 15 * 60 * 1000;
 /** Consecutive failed/reclaimed runs before a card auto-blocks for a human (docs/08 §4, ⚠️ OPEN). */
 const CIRCUIT_BREAKER_LIMIT = 2;
+/** Push delivery attempts before a delivery is dead-lettered (docs/05 §4). */
+const MAX_PUSH_ATTEMPTS = 5;
 
 /** The decisions a human can take at an approval gate (docs/08 §6). */
 const DEFAULT_GATE_OPTIONS: GateOption[] = [
@@ -33,6 +35,29 @@ export interface StageDef {
   owner?: string; // a capability tag (ownerKind=capability) or an agentId (ownerKind=agent)
   gate?: 'none' | 'approval';
   wipLimit?: number;
+  /** Stage routing strategy (docs/05 §7): `pipeline` (sequential handoff, default) vs `manager`. */
+  routing?: 'pipeline' | 'manager';
+}
+
+/** A reusable agent configuration bundle (docs/05 §7). */
+export interface ProfileInput {
+  key: string;
+  name?: string;
+  harness?: string;
+  model?: string;
+  permissionPolicy?: string;
+  autonomyLevel?: string;
+  capabilities?: string[];
+}
+
+export interface ProfileView {
+  key: string;
+  name: string | null;
+  harness: string | null;
+  model: string | null;
+  permissionPolicy: string | null;
+  autonomyLevel: string | null;
+  capabilities: string[];
 }
 
 export interface BoardInit {
@@ -109,6 +134,7 @@ export interface AttemptView {
   endedAt: string | null;
   costUsd: number;
   model: string | null;
+  profileKey: string | null;
 }
 
 /** Per-activity token/cost usage reported by an agent (docs/05 §1). */
@@ -261,7 +287,9 @@ export interface BoardStub {
   getState(): Promise<BoardSnapshot>;
   getEvents(limit?: number): Promise<BoardEvent[]>;
   // Agent contract (docs/04 §3)
-  claim(input: { agentId: string; capabilities: string[]; maxConcurrency?: number }): Promise<ClaimResult>;
+  claim(input: { agentId: string; capabilities: string[]; maxConcurrency?: number; profileKey?: string }): Promise<ClaimResult>;
+  setProfile(input: ProfileInput): Promise<Result<{ key: string }>>;
+  getProfiles(): Promise<ProfileView[]>;
   heartbeat(input: { runId: string; leaseEpoch: number }): Promise<Result<{ acknowledged: true }>>;
   postActivity(input: AgentActivityInput): Promise<Result<{ accepted: true; cardState: TaskState }>>;
   complete(input: { runId: string; leaseEpoch: number; handoff?: JsonValue }): Promise<Result<CardView>>;
@@ -280,6 +308,13 @@ export interface BoardStub {
   getPushDeliveries(opts?: { status?: string }): Promise<PushDeliveryView[]>;
   dispatchPushDeliveries(): Promise<{ sent: number; failed: number }>;
   setGithubSecret(secret: string): Promise<Result<{ configured: true }>>;
+  setGithubConfig(input: { secret?: string; issueTrigger?: boolean }): Promise<Result<{ ok: true }>>;
+  createCardFromTrigger(input: {
+    title: string;
+    ownerUserId: string;
+    spec?: JsonValue;
+    source?: { url: string; provider?: string; sourceType?: string; externalId?: string; title?: string; metadata?: JsonValue };
+  }): Promise<Result<{ card: CardView; reference: ReferenceView | null }>>;
   handleGithubWebhook(input: {
     rawBody: string;
     signature: string | null;
@@ -426,6 +461,25 @@ export class BoardDO extends DurableObject<Env> {
         created_at TEXT NOT NULL
       )`,
     );
+    // Agent profiles (docs/05 §7): reusable configuration bundles, selected on claim.
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS profiles (
+        key TEXT PRIMARY KEY,
+        name TEXT,
+        harness TEXT,
+        model TEXT,
+        permission_policy TEXT,
+        autonomy_level TEXT,
+        capabilities_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+      )`,
+    );
+    // An attempt pins the profile it ran under (docs/05 §7) — added as a guarded migration.
+    try {
+      this.sql.exec(`ALTER TABLE runs ADD COLUMN profile_key TEXT`);
+    } catch {
+      // column already exists
+    }
     // In-app notifications (docs/07 §7): the notify-worthy status transitions, for the card owner.
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS notifications (
@@ -530,6 +584,35 @@ export class BoardDO extends DurableObject<Env> {
     this.emit('card.created', { card });
     this.notifyWorkAvailable(id);
     return { ok: true, value: card };
+  }
+
+  /**
+   * The one inbound-trigger path (docs/05 §6): every source (API, GitHub issue, Slack, schedule)
+   * funnels here — create a card and attach the originating resource as a provenance reference.
+   */
+  async createCardFromTrigger(input: {
+    title: string;
+    ownerUserId: string;
+    spec?: JsonValue;
+    source?: { url: string; provider?: string; sourceType?: string; externalId?: string; title?: string; metadata?: JsonValue };
+  }): Promise<Result<{ card: CardView; reference: ReferenceView | null }>> {
+    const created = await this.createCard({ title: input.title, ownerUserId: input.ownerUserId, spec: input.spec });
+    if (!created.ok) return { ok: false, code: created.code, message: created.message };
+    let reference: ReferenceView | null = null;
+    if (input.source) {
+      const ref = await this.addReference({
+        cardId: created.value.id,
+        url: input.source.url,
+        provider: input.source.provider ?? 'url',
+        sourceType: input.source.sourceType ?? 'url',
+        externalId: input.source.externalId,
+        title: input.source.title,
+        metadata: input.source.metadata,
+        addedBy: 'agent',
+      });
+      if (ref.ok) reference = ref.value;
+    }
+    return { ok: true, value: { card: created.value, reference } };
   }
 
   /** Human move (docs/03). Enforces stage existence and the target stage's WIP limit. */
@@ -668,6 +751,16 @@ export class BoardDO extends DurableObject<Env> {
     return { ok: true, value: { configured: true } };
   }
 
+  /** Configure GitHub integration: webhook secret + whether opened issues auto-create cards (docs/05 §6). */
+  async setGithubConfig(input: { secret?: string; issueTrigger?: boolean }): Promise<Result<{ ok: true }>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    if (input.secret !== undefined) this.setMeta('githubWebhookSecret', input.secret);
+    if (input.issueTrigger !== undefined) this.setMeta('githubIssueTrigger', input.issueTrigger ? '1' : '0');
+    return { ok: true, value: { ok: true } };
+  }
+
   /**
    * Ingest a GitHub webhook (docs/06 §3): verify the HMAC signature over the raw body, dedup on the
    * delivery id, then apply the draft-PR sub-state machine to every reference matching the event's
@@ -706,6 +799,26 @@ export class BoardDO extends DurableObject<Env> {
     } catch {
       return { ok: true, value: { deduped: false, matched: 0, modeled: false } };
     }
+
+    // Inbound trigger (docs/05 §6): an opened issue auto-creates a card when enabled for this board.
+    const p = payload as Record<string, any>;
+    if (input.event === 'issues' && p.action === 'opened' && this.getMeta('githubIssueTrigger') === '1') {
+      const issue = p.issue as Record<string, any> | undefined;
+      const fullName = (p.repository as Record<string, any> | undefined)?.full_name as string | undefined;
+      if (issue && typeof issue.number === 'number' && fullName) {
+        await this.createCardFromTrigger({
+          title: (issue.title as string) ?? `Issue #${issue.number}`,
+          ownerUserId: 'usr_github',
+          source: {
+            url: issue.html_url as string,
+            provider: 'github',
+            sourceType: 'issue',
+            externalId: `${fullName.toLowerCase()}#${issue.number}`,
+          },
+        });
+      }
+    }
+
     const mapped = mapGithubEvent(input.event, payload);
     if (!mapped) return { ok: true, value: { deduped: false, matched: 0, modeled: false } };
 
@@ -774,6 +887,44 @@ export class BoardDO extends DurableObject<Env> {
     return { ok: true, value: { ok: true } };
   }
 
+  /** Define or replace an agent profile by key (docs/05 §7). */
+  async setProfile(input: ProfileInput): Promise<Result<{ key: string }>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    this.sql.exec(
+      `INSERT INTO profiles (key, name, harness, model, permission_policy, autonomy_level, capabilities_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET name = excluded.name, harness = excluded.harness, model = excluded.model,
+         permission_policy = excluded.permission_policy, autonomy_level = excluded.autonomy_level, capabilities_json = excluded.capabilities_json`,
+      input.key,
+      input.name ?? null,
+      input.harness ?? null,
+      input.model ?? null,
+      input.permissionPolicy ?? null,
+      input.autonomyLevel ?? null,
+      JSON.stringify(input.capabilities ?? []),
+      this.now(),
+    );
+    return { ok: true, value: { key: input.key } };
+  }
+
+  /** List the board's agent profiles (docs/05 §7). */
+  async getProfiles(): Promise<ProfileView[]> {
+    return this.sql
+      .exec(`SELECT * FROM profiles ORDER BY key ASC`)
+      .toArray()
+      .map((r) => ({
+        key: r.key as string,
+        name: (r.name as string | null) ?? null,
+        harness: (r.harness as string | null) ?? null,
+        model: (r.model as string | null) ?? null,
+        permissionPolicy: (r.permission_policy as string | null) ?? null,
+        autonomyLevel: (r.autonomy_level as string | null) ?? null,
+        capabilities: JSON.parse(r.capabilities_json as string) as string[],
+      }));
+  }
+
   /** Register/replace an agent's push subscription (docs/05 §4). Only http(s) urls (SSRF guard). */
   async registerPushConfig(input: PushConfigInput): Promise<Result<{ configId: string }>> {
     if (!this.getMeta('boardId')) {
@@ -827,21 +978,21 @@ export class BoardDO extends DurableObject<Env> {
    * backoff — wraps this. A single drain marks each delivery sent/failed.
    */
   async dispatchPushDeliveries(sender: PushSender = defaultPushSender): Promise<{ sent: number; failed: number }> {
+    // Retry pending + previously-failed rows under the attempt cap; exhausted ones are dead-lettered.
     const rows = this.sql
       .exec(
-        `SELECT d.id, d.url, d.body, c.token FROM push_deliveries d JOIN push_configs c ON d.config_id = c.id WHERE d.status = 'pending' ORDER BY d.id ASC LIMIT 50`,
+        `SELECT d.id, d.url, d.body, d.attempts, c.token FROM push_deliveries d JOIN push_configs c ON d.config_id = c.id
+         WHERE d.status IN ('pending', 'failed') AND d.attempts < ? ORDER BY d.id ASC LIMIT 50`,
+        MAX_PUSH_ATTEMPTS,
       )
       .toArray();
     let sent = 0;
     let failed = 0;
     for (const r of rows) {
       const outcome = await signAndSend({ id: Number(r.id), url: r.url as string, body: r.body as string, token: r.token as string }, sender);
-      this.sql.exec(
-        `UPDATE push_deliveries SET status = ?, attempts = attempts + 1, last_status = ? WHERE id = ?`,
-        outcome.ok ? 'sent' : 'failed',
-        outcome.status,
-        r.id,
-      );
+      const attempts = Number(r.attempts) + 1;
+      const status = outcome.ok ? 'sent' : attempts >= MAX_PUSH_ATTEMPTS ? 'dead' : 'failed';
+      this.sql.exec(`UPDATE push_deliveries SET status = ?, attempts = ?, last_status = ? WHERE id = ?`, status, attempts, outcome.status, r.id);
       if (outcome.ok) sent++;
       else failed++;
     }
@@ -931,6 +1082,7 @@ export class BoardDO extends DurableObject<Env> {
           endedAt: (r.ended_at as string | null) ?? null,
           costUsd: cost,
           model: modelRow ? (modelRow.model as string) : null,
+          profileKey: (r.profile_key as string | null) ?? null,
         };
       });
   }
@@ -942,6 +1094,7 @@ export class BoardDO extends DurableObject<Env> {
     agentId: string;
     capabilities: string[];
     maxConcurrency?: number;
+    profileKey?: string;
   }): Promise<ClaimResult> {
     if (!this.getMeta('boardId')) return { claimed: false };
     // Budget cap (docs/07 §6): once the board hits its USD ceiling, stop handing out new work.
@@ -973,8 +1126,8 @@ export class BoardDO extends DurableObject<Env> {
     const now = this.now();
     const nowMs = this.nowMs();
     this.sql.exec(
-      `INSERT INTO runs (id, card_id, stage_key, agent_id, lease_epoch, status, outcome, last_heartbeat_ms, started_at, ended_at)
-       VALUES (?, ?, ?, ?, ?, 'working', NULL, ?, ?, NULL)`,
+      `INSERT INTO runs (id, card_id, stage_key, agent_id, lease_epoch, status, outcome, last_heartbeat_ms, started_at, ended_at, profile_key)
+       VALUES (?, ?, ?, ?, ?, 'working', NULL, ?, ?, NULL, ?)`,
       runId,
       card.id,
       card.currentStageKey,
@@ -982,6 +1135,7 @@ export class BoardDO extends DurableObject<Env> {
       leaseEpoch,
       nowMs,
       now,
+      input.profileKey ?? null,
     );
     this.sql.exec(
       `UPDATE cards SET state = 'working', delegate_agent_id = ?, current_run_id = ?, claim_seq = ?, updated_at = ? WHERE id = ?`,

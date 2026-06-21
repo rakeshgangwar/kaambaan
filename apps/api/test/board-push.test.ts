@@ -105,6 +105,25 @@ describe('BoardDO — outbound push (docs/05 §4)', () => {
     });
   });
 
+  it('retries a failed delivery on later drains, then dead-letters it at the cap', async () => {
+    await runInDurableObject(stubFor('p-retry'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_pr2', tenantId: 'tnt_a', name: 'PR2', stages: BUILD });
+      await board.registerPushConfig({ agentId: 'agt_b', url: HOOK, token: 's', capabilities: ['build'], events: ['work.available'] });
+      await board.createCard({ title: 'X', ownerUserId: 'usr_a' });
+      const fail500 = async () => ({ status: 500 });
+
+      // Attempts 1-4: still retryable.
+      for (let i = 0; i < 4; i++) await board.dispatchPushDeliveries(fail500);
+      expect((await board.getPushDeliveries())[0]!.status).toBe('failed');
+
+      // Attempt 5 hits the cap → dead-lettered, no longer retried.
+      await board.dispatchPushDeliveries(fail500);
+      expect((await board.getPushDeliveries())[0]!.status).toBe('dead');
+      const next = await board.dispatchPushDeliveries(async () => ({ status: 200 }));
+      expect(next).toEqual({ sent: 0, failed: 0 });
+    });
+  });
+
   it('marks a failed delivery and counts it', async () => {
     await runInDurableObject(stubFor('p-failed'), async (board: BoardDO) => {
       await board.init({ id: 'brd_pf', tenantId: 'tnt_a', name: 'PF', stages: BUILD });

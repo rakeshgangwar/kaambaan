@@ -270,6 +270,9 @@
             {#if stage.gate === 'approval'}
               <span title="Approval gate">⛳</span>
             {/if}
+            {#if stage.routing === 'manager'}
+              <span title="Manager routing" class="text-muted-foreground text-[10px] uppercase">mgr</span>
+            {/if}
           </div>
           <div class="flex min-h-10 flex-col gap-2">
             {#each cards as card (card.id)}
@@ -319,7 +322,7 @@
                     <div class="mt-1 space-y-1 border-l pl-2 text-xs">
                       {#each attemptsByCard[card.id] as a, i (a.runId)}
                         <div class="flex items-center justify-between gap-2">
-                          <span class="text-muted-foreground">#{i + 1} {a.agentId}{a.model ? ` · ${a.model}` : ''}</span>
+                          <span class="text-muted-foreground">#{i + 1} {a.agentId}{a.profileKey ? ` · ${a.profileKey}` : a.model ? ` · ${a.model}` : ''}</span>
                           <span>{fmtUsd(a.costUsd)}{a.outcome ? ` · ${a.outcome}` : ''}</span>
                         </div>
                       {/each}

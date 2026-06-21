@@ -209,6 +209,13 @@ an existing tracker → a task.** Kaambaan models every trigger as an **adapter 
 
 No source is special-cased; each just produces a card with provenance.
 
+**Implementation (P7)**: the funnel is `createCardFromTrigger({title, ownerUserId, source})` — create a
+card and attach the originating resource as a reference (`apps/api/src/board/board-do.ts`). Wired:
+**API** (`POST …/triggers` — the generic inbound path) and **GitHub issue** (`issues.opened` →
+card+reference when `issueTrigger` is enabled via `PUT …/github`). **⚠️ Remaining**: Slack
+(`@kaambaan` — needs the Slack app from P7's notifications gap) and Schedule (a Workflow cron); both
+reuse the same funnel, only the adapter differs.
+
 ## 7. Agent profiles (configuration as data)
 
 A **profile** is a reusable, named bundle: `{ harness, model, permissionPolicy, autonomyLevel,
@@ -217,3 +224,13 @@ editable via GUI **and** as a checked-in JSON file, and selected when an agent c
 stage dispatches. An **Attempt** ([03](./03-card-lifecycle.md) / [07](./07-realtime-and-ui.md))
 pins the profile it ran under, so re-running a card under a *different* profile is a first-class,
 comparable operation.
+
+**Implementation (P7)**: profiles are board-scoped data — `setProfile({key, harness, model,
+permissionPolicy, autonomyLevel, capabilities})` / `getProfiles` (`GET/POST …/profiles`). `claim`
+accepts a `profileKey`, recorded on the run, so the **attempt pins its profile** (surfaced in the
+attempts comparison). Per-stage routing is a `StageDef.routing` field (`pipeline` | `manager`,
+default pipeline). **⚠️ Remaining**: **tenant-scoped** profiles + the checked-in-JSON/GUI editing
+surface (this slice is per-board); enforcing `permissionPolicy`/`autonomyLevel` at dispatch; and the
+**manager** routing *behavior* (the field round-trips today; a manager agent orchestrating sub-agents
+is a follow-up). Additional harness adapters (Codex NDJSON, OpenCode SSE, ACP bridge) follow the
+Claude `normalizeEvents` pattern (docs/07 §1) once their wire formats are pinned.

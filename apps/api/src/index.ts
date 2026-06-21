@@ -183,6 +183,25 @@ export default {
         return Response.json(r.ok ? r.value : { error: r });
       }
 
+      // GET/POST /v1/boards/:id/profiles — agent profiles as data (docs/05 §7)
+      if (rest === 'profiles' && request.method === 'GET') {
+        return Response.json({ profiles: await stub.getProfiles() });
+      }
+      if (rest === 'profiles' && request.method === 'POST') {
+        const body = (await request.json()) as {
+          key: string;
+          name?: string;
+          harness?: string;
+          model?: string;
+          permissionPolicy?: string;
+          autonomyLevel?: string;
+          capabilities?: string[];
+        };
+        const result = await stub.setProfile(body);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value, { status: 201 });
+      }
+
       // POST /v1/boards/:id/push-configs — register an agent push subscription (docs/05 §4)
       if (rest === 'push-configs' && request.method === 'POST') {
         const agentId = request.headers.get('X-Agent-Id');
@@ -211,12 +230,25 @@ export default {
         return Response.json(result.value);
       }
 
-      // PUT /v1/boards/:id/github — configure the board's GitHub webhook secret (docs/06 §3)
+      // PUT /v1/boards/:id/github — configure GitHub: webhook secret + issue→card trigger (docs/06 §3, docs/05 §6)
       if (rest === 'github' && request.method === 'PUT') {
-        const body = (await request.json()) as { secret: string };
-        const result = await stub.setGithubSecret(body.secret);
+        const body = (await request.json()) as { secret?: string; issueTrigger?: boolean };
+        const result = await stub.setGithubConfig(body);
         if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
         return Response.json(result.value);
+      }
+
+      // POST /v1/boards/:id/triggers — generic inbound trigger → one createCard path (docs/05 §6)
+      if (rest === 'triggers' && request.method === 'POST') {
+        const body = (await request.json()) as {
+          title: string;
+          ownerUserId?: string;
+          spec?: JsonValue;
+          source?: { url: string; provider?: string; sourceType?: string; externalId?: string; title?: string; metadata?: JsonValue };
+        };
+        const result = await stub.createCardFromTrigger({ title: body.title, ownerUserId: body.ownerUserId ?? 'usr_trigger', spec: body.spec, source: body.source });
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value, { status: 201 });
       }
 
       // POST /v1/boards/:id/webhooks/github — inbound GitHub webhook (docs/06 §3).
@@ -240,11 +272,12 @@ export default {
         if (!agentId || agentId.trim() === '') {
           return Response.json({ error: 'X-Agent-Id required' }, { status: 400 });
         }
-        const payload = (await request.json()) as { capabilities?: string[]; maxConcurrency?: number };
+        const payload = (await request.json()) as { capabilities?: string[]; maxConcurrency?: number; profileKey?: string };
         const claimResult = await stub.claim({
           agentId,
           capabilities: payload.capabilities ?? [],
           maxConcurrency: payload.maxConcurrency,
+          profileKey: payload.profileKey,
         });
         return Response.json(claimResult);
       }
