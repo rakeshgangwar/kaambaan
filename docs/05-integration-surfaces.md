@@ -149,13 +149,18 @@ for every subscribed config whose `capabilities` match the stage's owner — so 
 about work it could actually claim. `dispatchPushDeliveries(sender)` drains pending rows, **signs each
 body** (`X-Kaambaan-Signature: sha256=…`, HMAC over the exact bytes — shared with the inbound GitHub
 verifier, `src/crypto/hmac.ts`) and POSTs it (`src/push/deliver.ts`), marking each sent/failed.
-`POST …/push/dispatch` triggers a drain; `GET …/push/deliveries` inspects the queue.
+`POST …/push/dispatch` triggers a drain; `GET …/push/deliveries` inspects the queue. URLs are checked
+against an **SSRF denylist** (`src/push/ssrf.ts` — only public http(s); blocks localhost, loopback,
+RFC1918, link-local/169.254 metadata, IPv6 ULA/link-local).
 
-- **⚠️ Remaining**: the **durable transport** — enqueue to a Cloudflare **Queue**, deliver from a
-  **Workflow** with exponential backoff + retry caps (this slice does a single-attempt drain with an
-  injectable sender; the contract, targeting, and signing are complete and tested). Events beyond
-  `work.available` (`gate.resolved`, `run.reclaimed`, `card.canceled`) and per-config URL
-  ownership-verification are fast-follows.
+- **⚠️ Best-effort today**: this slice is **at-most-once** — a `failed` delivery is terminal (not
+  retried). Push is only an accelerator over the always-available pull path, so a dropped ping just
+  means the agent learns of work on its next poll. **Durable transport** (Cloudflare **Queue** →
+  **Workflow** with exponential backoff + retry caps) is the upgrade to at-least-once.
+- **⚠️ Remaining**: events beyond `work.available` (`gate.resolved`, `run.reclaimed`,
+  `card.canceled`); **URL ownership-verification** (the literal-IP denylist doesn't stop DNS
+  rebinding — a host allowlist / challenge-response is the durable fix); auth on `push/dispatch` +
+  `push/deliveries` when real auth replaces the dev headers.
 
 ## 5. Harness adapters (the "any harness, anywhere" layer)
 

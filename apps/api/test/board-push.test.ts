@@ -62,6 +62,49 @@ describe('BoardDO — outbound push (docs/05 §4)', () => {
     });
   });
 
+  it('targets an agent-owned stage to only that agent', async () => {
+    await runInDurableObject(stubFor('p-agentstage'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_pa', tenantId: 'tnt_a', name: 'PA', stages: [{ key: 'work', name: 'Work', order: 0, ownerKind: 'agent', owner: 'agt_a' }] });
+      const a = await board.registerPushConfig({ agentId: 'agt_a', url: 'https://a.example/h', token: 's', events: ['work.available'] });
+      await board.registerPushConfig({ agentId: 'agt_b', url: 'https://b.example/h', token: 's', events: ['work.available'] });
+      await board.createCard({ title: 'X', ownerUserId: 'usr_a' });
+
+      const d = await board.getPushDeliveries();
+      expect(d).toHaveLength(1);
+      expect(d[0]!.configId).toBe(a.ok && a.value.configId);
+    });
+  });
+
+  it('does not notify a config not subscribed to work.available', async () => {
+    await runInDurableObject(stubFor('p-events'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_pe', tenantId: 'tnt_a', name: 'PE', stages: BUILD });
+      await board.registerPushConfig({ agentId: 'agt_b', url: HOOK, token: 's', capabilities: ['build'], events: ['gate.resolved'] });
+      await board.createCard({ title: 'X', ownerUserId: 'usr_a' });
+      expect(await board.getPushDeliveries()).toHaveLength(0);
+    });
+  });
+
+  it('re-notifies when a failed run returns the card to the queue', async () => {
+    await runInDurableObject(stubFor('p-renotify'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_pr', tenantId: 'tnt_a', name: 'PR', stages: BUILD });
+      await board.registerPushConfig({ agentId: 'agt_b', url: HOOK, token: 's', capabilities: ['build'], events: ['work.available'] });
+      await board.createCard({ title: 'X', ownerUserId: 'usr_a' }); // delivery #1
+      const run = await board.claim({ agentId: 'agt_b', capabilities: ['build'] });
+      if (!run.claimed) throw new Error('claim');
+      await board.fail({ runId: run.runId, leaseEpoch: run.leaseEpoch, reason: 'flaky' }); // re-queues → delivery #2
+      expect(await board.getPushDeliveries()).toHaveLength(2);
+    });
+  });
+
+  it('rejects a private/metadata IP push url (SSRF)', async () => {
+    await runInDurableObject(stubFor('p-meta'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_pm', tenantId: 'tnt_a', name: 'PM', stages: BUILD });
+      const r = await board.registerPushConfig({ agentId: 'a', url: 'http://169.254.169.254/latest/meta-data/', token: 's' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.code).toBe('INVALID_URL');
+    });
+  });
+
   it('marks a failed delivery and counts it', async () => {
     await runInDurableObject(stubFor('p-failed'), async (board: BoardDO) => {
       await board.init({ id: 'brd_pf', tenantId: 'tnt_a', name: 'PF', stages: BUILD });
