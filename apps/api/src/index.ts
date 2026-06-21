@@ -150,9 +150,37 @@ export default {
         return Response.json({ reference: result.value });
       }
 
-      // GET /v1/boards/:id/usage — cost/usage rollup (docs/07 §6)
+      // GET /v1/boards/:id/cards/:cardId/attempts — attempts comparison (docs/07 §5)
+      const attemptsMatch = rest.match(/^cards\/([^/]+)\/attempts$/);
+      if (attemptsMatch && request.method === 'GET') {
+        return Response.json({ attempts: await stub.getAttempts(attemptsMatch[1]!) });
+      }
+
+      // GET /v1/boards/:id/cards/:cardId/estimate — pre-run cost estimate (docs/07 §6)
+      const estimateMatch = rest.match(/^cards\/([^/]+)\/estimate$/);
+      if (estimateMatch && request.method === 'GET') {
+        const result = await stub.estimateCardCost(estimateMatch[1]!);
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value);
+      }
+
+      // GET /v1/boards/:id/usage — cost/usage rollup (docs/07 §6). `?window=` filters to a recent span.
       if (rest === 'usage' && request.method === 'GET') {
-        return Response.json(await stub.getUsage());
+        const window = url.searchParams.get('window');
+        return Response.json(await stub.getUsage(window ? { window } : undefined));
+      }
+
+      // GET /v1/boards/:id/notifications — in-app notification feed (docs/07 §7)
+      if (rest === 'notifications' && request.method === 'GET') {
+        const unreadOnly = url.searchParams.get('unread') === 'true';
+        return Response.json({ notifications: await stub.getNotifications({ unreadOnly }) });
+      }
+
+      // POST /v1/boards/:id/notifications/:seq/read — mark a notification read (docs/07 §7)
+      const notifReadMatch = rest.match(/^notifications\/(\d+)\/read$/);
+      if (notifReadMatch && request.method === 'POST') {
+        const r = await stub.markNotificationRead(Number(notifReadMatch[1]));
+        return Response.json(r.ok ? r.value : { error: r });
       }
 
       // PUT /v1/boards/:id/budget — set/clear USD budget caps (docs/07 §6)

@@ -138,10 +138,22 @@ see what's modeled vs reported. Surfaces:
 
 `usage` flows over both wires (REST `runs/:id/activities`, MCP `kaambaan_post_activity`).
 
-- **⚠️ Remaining P6 work**: AG-UI native-stream adapters (§1), the **Attempts comparison UI** (§5),
-  **rolling-window** tenant views + cross-board/tenant rollup (this slice meters within a board DO),
-  pre-run cost **estimates** shown before a stage, and **notifications** (§7, in-app/email/Slack gate
-  buttons).
+**Follow-up slices (delivered):**
+- **Attempts** (§5) — `getAttempts(cardId)` lists each run with its agent · model · cost · outcome;
+  `CardView.attemptCount` + a click-to-expand comparison on the card. `GET …/cards/:id/attempts`.
+- **Rolling windows** (§6) — `getUsage({window})` (`5h`/`7d`) filters the rollup to recent spend
+  (`src/metering/window.ts`). Within a board DO; cross-board/tenant aggregation still pending.
+- **Pre-run estimate** (§6) — `estimateCardCost(cardId)` averages historical runs at the card's stage
+  (`GET …/cards/:id/estimate`).
+- **AG-UI adapter** (§1) — `normalizeClaudeStreamLine` translates Claude Code `stream-json` →
+  normalized activities (`src/adapters/claude-code.ts`); a bridge POSTs each, including usage.
+- **In-app notifications** (§7) — notify-worthy transitions (gate opened, failed, reclaimed) record a
+  notification for the card owner; `getNotifications`/`markNotificationRead`, a 🔔 unread badge + feed.
+
+- **⚠️ Remaining**: **cross-board/tenant** usage rollup + rolling windows over the D1 catalog;
+  **email + Slack** delivery and the **Slack interactive gate-resolve** endpoint (both need an
+  operator-configured app: Slack signing secret + bot token, an email provider); and more harness
+  adapters (Codex NDJSON, OpenCode SSE).
 
 ## 7. Notifications
 
