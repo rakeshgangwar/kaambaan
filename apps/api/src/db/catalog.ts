@@ -112,6 +112,19 @@ export async function listBoards(db: D1Database, tenantId: string): Promise<Arra
   return results;
 }
 
+/** Remove a board from the catalog (tenant-scoped). The DO's live state is left untouched. */
+export async function deleteBoard(db: D1Database, tenantId: string, boardId: string): Promise<void> {
+  await db.prepare(`DELETE FROM boards WHERE tenant_id = ? AND id = ?`).bind(tenantId, boardId).run();
+}
+
+/** Delete an agent and its tokens (tokens first, to satisfy the FK), tenant-scoped. */
+export async function deleteAgent(db: D1Database, tenantId: string, agentId: string): Promise<void> {
+  await db.batch([
+    db.prepare(`DELETE FROM agent_tokens WHERE tenant_id = ? AND agent_id = ?`).bind(tenantId, agentId),
+    db.prepare(`DELETE FROM agents WHERE tenant_id = ? AND id = ?`).bind(tenantId, agentId),
+  ]);
+}
+
 /**
  * Minimal subset of the D1 query API we depend on — declared structurally so the repository can be
  * unit-tested with a fake (and so the catalog isn't coupled to a specific runtime type).

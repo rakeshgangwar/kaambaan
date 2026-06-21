@@ -15,8 +15,12 @@
     getMe,
     logout,
     createAgent,
-    DEFAULT_STAGES,
+    getAgents,
+    deleteBoard,
+    deleteAgent,
+    BOARD_TEMPLATES,
     type BoardSnapshot,
+    type BoardSummary,
     type GateDecision,
     type Attempt,
     type CardActivities,
@@ -35,9 +39,19 @@
   let needsBoard = $state(false); // signed in but no boards yet → onboarding
   let creating = $state(false);
 
-  // connect-an-agent panel
+  // boards (switcher + create from a template)
+  let boards = $state<BoardSummary[]>([]);
+  let showBoardMenu = $state(false);
+  let showNewBoard = $state(false);
+  let newBoardName = $state('');
+  let newBoardTemplate = $state(BOARD_TEMPLATES[0]!.id);
+
+  // agents manager (list + mint + revoke)
   let showConnect = $state(false);
+  let agents = $state<Array<{ id: string; name: string; capabilities: string[] }>>([]);
+  const ALL_CAPS = ['research', 'review', 'publish'];
   let agentName = $state('');
+  let newCaps = $state<string[]>(['research', 'review', 'publish']);
   let minted = $state<AgentToken | null>(null);
   let minting = $state(false);
 
@@ -57,7 +71,7 @@
   let drawerAttempts = $state<Attempt[]>([]);
   let gateComment = $state('');
 
-  let boardId: string | null = null;
+  let boardId = $state<string | null>(null);
 
   async function refresh(): Promise<void> {
     if (!boardId) return;
@@ -124,15 +138,66 @@
     await refresh();
   }
 
+  async function loadBoards(): Promise<void> {
+    try {
+      boards = await getBoards();
+    } catch {
+      /* the switcher list is best-effort */
+    }
+  }
+
   async function openBoard(id: string): Promise<void> {
     boardId = id;
     needsBoard = false;
+    showBoardMenu = false;
     localStorage.setItem(BOARD_KEY, id);
     await refresh();
+    await loadBoards();
     socket?.close();
     socket = openBoardSocket(id, refresh);
     socket.addEventListener('open', () => (connected = true));
     socket.addEventListener('close', () => (connected = false));
+  }
+
+  async function switchBoard(id: string): Promise<void> {
+    showBoardMenu = false;
+    if (id !== boardId) await openBoard(id);
+  }
+
+  async function createNewBoard(): Promise<void> {
+    const tpl = BOARD_TEMPLATES.find((t) => t.id === newBoardTemplate) ?? BOARD_TEMPLATES[0]!;
+    if (newBoardName.trim() === '') return;
+    creating = true;
+    try {
+      await openBoard(await createBoard(newBoardName.trim(), tpl.stages));
+      showNewBoard = false;
+      newBoardName = '';
+    } catch (e) {
+      error = String(e);
+    } finally {
+      creating = false;
+    }
+  }
+
+  async function onDeleteBoard(id: string): Promise<void> {
+    const res = await deleteBoard(id);
+    if (!res.ok) {
+      error = `Couldn't delete that board (${res.status})`;
+      return;
+    }
+    await loadBoards();
+    if (id === boardId) {
+      const next = boards[0];
+      if (next) {
+        await openBoard(next.id);
+      } else {
+        boardId = null;
+        board = null;
+        localStorage.removeItem(BOARD_KEY);
+        needsBoard = true;
+        socket?.close();
+      }
+    }
   }
 
   onMount(() => {
@@ -155,7 +220,7 @@
           }
         }
         if (!id) {
-          const boards = await getBoards();
+          await loadBoards();
           id = boards[0]?.id ?? null;
         }
         if (!id) {
@@ -173,7 +238,8 @@
   async function createFirstBoard(): Promise<void> {
     creating = true;
     try {
-      await openBoard(await createBoard('My first board', DEFAULT_STAGES));
+      // Default a new user into the agent pipeline so their board is workable by agents from day one.
+      await openBoard(await createBoard('My first board', BOARD_TEMPLATES[0]!.stages));
     } catch (e) {
       error = String(e);
     } finally {
@@ -186,16 +252,37 @@
     location.reload();
   }
 
+  async function openAgents(): Promise<void> {
+    showConnect = true;
+    minted = null;
+    try {
+      agents = await getAgents();
+    } catch {
+      agents = [];
+    }
+  }
+
+  function toggleCap(cap: string): void {
+    newCaps = newCaps.includes(cap) ? newCaps.filter((c) => c !== cap) : [...newCaps, cap];
+  }
+
   async function mintAgent(): Promise<void> {
-    if (agentName.trim() === '') return;
+    if (agentName.trim() === '' || newCaps.length === 0) return;
     minting = true;
     try {
-      minted = await createAgent(agentName.trim(), ['research', 'review', 'publish']);
+      minted = await createAgent(agentName.trim(), [...newCaps]);
+      agentName = '';
+      agents = await getAgents();
     } catch (e) {
       error = String(e);
     } finally {
       minting = false;
     }
+  }
+
+  async function onDeleteAgent(id: string): Promise<void> {
+    const res = await deleteAgent(id);
+    if (res.ok) agents = await getAgents();
   }
 
   function closeConnect(): void {
@@ -294,6 +381,8 @@
       closeDrawer();
       closeConnect();
       showNotifications = false;
+      showBoardMenu = false;
+      showNewBoard = false;
     }
   }}
 />
@@ -351,14 +440,14 @@
           A board is a pipeline. Work enters as cards and moves stage by stage — agents claim the cards they're capable of, do the work, and hand off down the line. An approval gate pauses the flow so nothing moves past review without your sign-off.
         </p>
         <div class="mt-4 flex flex-wrap items-center gap-1.5">
-          {#each DEFAULT_STAGES as s, i (s.key)}
-            <span class="border-border mono rounded-[6px] border px-2 py-1 text-[11px] {s.gate === 'approval' ? 'text-coral' : ''}">{s.name}{#if s.gate === 'approval'}<span class="ml-1 opacity-70">gate</span>{/if}</span>
-            {#if i < DEFAULT_STAGES.length - 1}<span style="color:var(--marigold)" aria-hidden="true">→</span>{/if}
+          {#each BOARD_TEMPLATES[0].stages as s, i (s.key)}
+            <span class="border-border mono rounded-[6px] border px-2 py-1 text-[11px] {s.ownerKind === 'capability' ? 'text-marigold' : s.gate === 'approval' ? 'text-coral' : ''}">{s.name}{#if s.gate === 'approval'}<span class="ml-1 opacity-70">gate</span>{/if}</span>
+            {#if i < BOARD_TEMPLATES[0].stages.length - 1}<span style="color:var(--marigold)" aria-hidden="true">→</span>{/if}
           {/each}
         </div>
         <div class="mt-6 flex flex-wrap gap-2.5">
           <Button onclick={createFirstBoard} disabled={creating}>{creating ? 'Creating…' : 'Create my first board'}</Button>
-          <Button variant="outline" onclick={() => (showConnect = true)}>Connect an agent</Button>
+          <Button variant="outline" onclick={openAgents}>Connect an agent</Button>
         </div>
       </div>
       <button onclick={onLogout} class="text-muted-foreground hover:text-foreground mono self-start text-xs">sign out</button>
@@ -385,7 +474,35 @@
             <span class="wordmark text-[19px] leading-none">Kaambaan</span>
             <span class="eyebrow">agent flight deck</span>
           </div>
-          <div class="mono text-muted-foreground mt-1 text-xs">{board.name}</div>
+          <!-- board switcher -->
+          <div class="relative mt-1">
+            <button
+              onclick={() => (showBoardMenu = !showBoardMenu)}
+              class="text-muted-foreground hover:text-foreground mono inline-flex items-center gap-1 text-xs"
+            >
+              {board.name}
+              <svg class="size-3 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            {#if showBoardMenu}
+              <div class="bg-card border-border absolute left-0 z-20 mt-2 w-72 rounded-[10px] border p-1.5 shadow-2xl">
+                <div class="eyebrow px-1.5 py-1">boards</div>
+                {#each boards as b (b.id)}
+                  <div class="group hover:bg-muted flex items-center rounded-[7px]">
+                    <button onclick={() => switchBoard(b.id)} class="flex flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs">
+                      <span class="size-1.5 shrink-0 rounded-full" style="background:{b.id === boardId ? 'var(--marigold)' : 'var(--muted)'}"></span>
+                      <span class="truncate {b.id === boardId ? 'text-foreground' : 'text-muted-foreground'}">{b.name}</span>
+                    </button>
+                    <button onclick={() => onDeleteBoard(b.id)} aria-label="Delete board" title="Delete board" class="text-muted-foreground hover:text-coral mr-1 px-1 opacity-0 group-hover:opacity-100">
+                      <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                    </button>
+                  </div>
+                {/each}
+                <button onclick={() => { showBoardMenu = false; showNewBoard = true; }} class="text-marigold hover:bg-muted mt-1 flex w-full items-center gap-1.5 rounded-[7px] px-2 py-1.5 text-left text-xs">
+                  <span class="text-sm leading-none">+</span> New board
+                </button>
+              </div>
+            {/if}
+          </div>
         </div>
       </div>
 
@@ -451,7 +568,7 @@
         </div>
 
         <!-- connect an agent -->
-        <Button size="sm" variant="outline" onclick={() => (showConnect = true)}>Connect agent</Button>
+        <Button size="sm" variant="outline" onclick={openAgents}>Agents</Button>
 
         <!-- identity -->
         <div class="border-border flex items-center gap-2 border-l pl-2.5">
@@ -699,37 +816,22 @@
     </div>
   {/if}
 
-  <!-- connect an agent -->
+  <!-- agents manager -->
   {#if showConnect}
     <div class="fixed inset-0 z-40 flex items-center justify-center p-4">
       <button class="absolute inset-0 bg-black/55" onclick={closeConnect} aria-label="Close" tabindex="-1"></button>
       <div class="bg-surface border-border drawer-in relative w-full max-w-lg rounded-[12px] border p-6 shadow-2xl">
         <div class="flex items-start justify-between gap-3">
           <div>
-            <div class="eyebrow mb-1">connect an agent</div>
-            <h2 class="wordmark text-lg leading-snug">Point an AI agent at this workspace</h2>
+            <div class="eyebrow mb-1">agents</div>
+            <h2 class="wordmark text-lg leading-snug">{minted ? 'Token created' : 'Agents in this workspace'}</h2>
           </div>
           <button onclick={closeConnect} aria-label="Close" class="text-muted-foreground hover:text-foreground shrink-0">
             <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
 
-        {#if !minted}
-          <p class="text-muted-foreground mt-2.5 text-sm leading-relaxed">
-            Name your agent and we'll mint a token it uses to claim and work cards. The token is shown once.
-          </p>
-          <div class="mt-4 flex gap-2">
-            <input
-              bind:value={agentName}
-              placeholder="e.g. Research bot"
-              onkeydown={(e) => {
-                if (e.key === 'Enter') mintAgent();
-              }}
-              class="bg-inset border-border focus:border-marigold flex-1 rounded-[7px] border px-3 py-2 text-sm outline-none"
-            />
-            <Button onclick={mintAgent} disabled={minting || agentName.trim() === ''}>{minting ? 'Minting…' : 'Generate token'}</Button>
-          </div>
-        {:else}
+        {#if minted}
           <p class="text-muted-foreground mt-2.5 text-sm leading-relaxed">
             <span class="text-foreground">{minted.agent.name}</span>'s token —
             <span class="text-coral">copy it now, it won't be shown again.</span>
@@ -740,9 +842,111 @@
           </div>
           <div class="eyebrow mt-5 mb-1.5">add it to your MCP client — .mcp.json</div>
           <pre class="bg-inset border-border mono overflow-x-auto rounded-[7px] border p-3 text-[11px] leading-relaxed">{mcpSnippet}</pre>
-          <p class="text-muted-foreground mt-2 text-xs leading-relaxed">The agent claims cards whose stage matches its capabilities (research · review · publish), works them, and hands off down the pipeline.</p>
-          <div class="mt-5 flex justify-end"><Button onclick={closeConnect}>Done</Button></div>
+          <p class="text-muted-foreground mt-2 text-xs leading-relaxed">The agent claims cards whose stage matches its capabilities, works them, and hands off down the pipeline.</p>
+          <div class="mt-5 flex justify-end"><Button onclick={() => (minted = null)}>Done</Button></div>
+        {:else}
+          <div class="mt-4 max-h-52 space-y-1.5 overflow-y-auto">
+            {#if agents.length === 0}
+              <p class="text-muted-foreground text-sm">No agents yet. Create one below — you'll get a token to point an AI agent at this workspace.</p>
+            {:else}
+              {#each agents as a (a.id)}
+                <div class="bg-inset border-border group flex items-center justify-between gap-2 rounded-[8px] border px-3 py-2">
+                  <div class="min-w-0">
+                    <div class="truncate text-sm">{a.name}</div>
+                    <div class="mt-1 flex flex-wrap gap-1">
+                      {#each a.capabilities as c (c)}<span class="border-border mono text-muted-foreground rounded-[4px] border px-1 py-0.5 text-[10px]">{c}</span>{/each}
+                    </div>
+                  </div>
+                  <button onclick={() => onDeleteAgent(a.id)} aria-label="Revoke agent" title="Revoke agent + its token" class="text-muted-foreground hover:text-coral shrink-0 opacity-0 group-hover:opacity-100">
+                    <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </button>
+                </div>
+              {/each}
+            {/if}
+          </div>
+
+          <div class="border-border mt-5 border-t pt-4">
+            <div class="eyebrow mb-2">new agent</div>
+            <input
+              bind:value={agentName}
+              placeholder="e.g. Research bot"
+              onkeydown={(e) => {
+                if (e.key === 'Enter') mintAgent();
+              }}
+              class="bg-inset border-border focus:border-marigold w-full rounded-[7px] border px-3 py-2 text-sm outline-none"
+            />
+            <div class="text-muted-foreground mt-2.5 mb-1.5 text-xs">capabilities it can claim:</div>
+            <div class="flex flex-wrap gap-1.5">
+              {#each ALL_CAPS as cap (cap)}
+                <button
+                  onclick={() => toggleCap(cap)}
+                  class="mono rounded-[6px] border px-2.5 py-1 text-[11px] transition {newCaps.includes(cap)
+                    ? 'border-marigold text-marigold'
+                    : 'border-border text-muted-foreground hover:text-foreground'}"
+                >
+                  {newCaps.includes(cap) ? '✓ ' : ''}{cap}
+                </button>
+              {/each}
+            </div>
+            <div class="mt-4 flex justify-end">
+              <Button onclick={mintAgent} disabled={minting || agentName.trim() === '' || newCaps.length === 0}>{minting ? 'Minting…' : 'Create + mint token'}</Button>
+            </div>
+          </div>
         {/if}
+      </div>
+    </div>
+  {/if}
+
+  <!-- new board -->
+  {#if showNewBoard}
+    <div class="fixed inset-0 z-40 flex items-center justify-center p-4">
+      <button class="absolute inset-0 bg-black/55" onclick={() => (showNewBoard = false)} aria-label="Close" tabindex="-1"></button>
+      <div class="bg-surface border-border drawer-in relative w-full max-w-lg rounded-[12px] border p-6 shadow-2xl">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="eyebrow mb-1">new board</div>
+            <h2 class="wordmark text-lg leading-snug">Create a board</h2>
+          </div>
+          <button onclick={() => (showNewBoard = false)} aria-label="Close" class="text-muted-foreground hover:text-foreground shrink-0">
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+
+        <input
+          bind:value={newBoardName}
+          placeholder="Board name — e.g. Launch"
+          onkeydown={(e) => {
+            if (e.key === 'Enter') createNewBoard();
+          }}
+          class="bg-inset border-border focus:border-marigold mt-4 w-full rounded-[7px] border px-3 py-2 text-sm outline-none"
+        />
+
+        <div class="eyebrow mt-5 mb-2">pipeline</div>
+        <div class="space-y-2">
+          {#each BOARD_TEMPLATES as tpl (tpl.id)}
+            <button
+              onclick={() => (newBoardTemplate = tpl.id)}
+              class="block w-full rounded-[9px] border p-3 text-left transition {newBoardTemplate === tpl.id ? 'border-marigold bg-inset' : 'border-border hover:border-border/80'}"
+            >
+              <div class="flex items-center gap-2">
+                <span class="size-3 rounded-full border" style="border-color:{newBoardTemplate === tpl.id ? 'var(--marigold)' : 'var(--line)'};background:{newBoardTemplate === tpl.id ? 'var(--marigold)' : 'transparent'}"></span>
+                <span class="text-sm font-medium">{tpl.name}</span>
+              </div>
+              <p class="text-muted-foreground mt-1.5 pl-5 text-xs leading-relaxed">{tpl.description}</p>
+              <div class="mt-2 flex flex-wrap items-center gap-1 pl-5">
+                {#each tpl.stages as s, i (s.key)}
+                  <span class="border-border mono rounded-[5px] border px-1.5 py-0.5 text-[10px] {s.ownerKind === 'capability' ? 'text-marigold' : s.gate === 'approval' ? 'text-coral' : 'text-muted-foreground'}">{s.name}</span>
+                  {#if i < tpl.stages.length - 1}<span class="text-muted-foreground" aria-hidden="true">→</span>{/if}
+                {/each}
+              </div>
+            </button>
+          {/each}
+        </div>
+
+        <div class="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" onclick={() => (showNewBoard = false)}>Cancel</Button>
+          <Button onclick={createNewBoard} disabled={creating || newBoardName.trim() === ''}>{creating ? 'Creating…' : 'Create board'}</Button>
+        </div>
       </div>
     </div>
   {/if}

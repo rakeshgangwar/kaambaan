@@ -31,6 +31,8 @@ export interface Stage {
   gate?: 'none' | 'approval';
   wipLimit?: number;
   routing?: 'pipeline' | 'manager';
+  ownerKind?: 'capability' | 'human';
+  owner?: string;
 }
 
 export interface Card {
@@ -139,6 +141,32 @@ export const DEFAULT_STAGES: Stage[] = [
   { key: 'done', name: 'Done', order: 4 },
 ];
 
+export interface BoardTemplate {
+  id: string;
+  name: string;
+  description: string;
+  stages: Stage[];
+}
+
+export const BOARD_TEMPLATES: BoardTemplate[] = [
+  {
+    id: 'agent-pipeline',
+    name: 'Agent pipeline',
+    description: 'Research → Review (your approval) → Publish. Agents work the Research & Publish lanes; you approve in the middle.',
+    stages: [
+      { key: 'research', name: 'Research', order: 0, ownerKind: 'capability', owner: 'research' },
+      { key: 'review', name: 'Review', order: 1, ownerKind: 'human', gate: 'approval' },
+      { key: 'publish', name: 'Publish', order: 2, ownerKind: 'capability', owner: 'publish' },
+    ],
+  },
+  {
+    id: 'simple',
+    name: 'Simple board',
+    description: 'A classic Kanban: Backlog → Ready → In Progress → Review → Done. All human lanes (you move the cards).',
+    stages: DEFAULT_STAGES,
+  },
+];
+
 export async function createBoard(name: string, stages: Stage[]): Promise<string> {
   const res = await fetch('/v1/boards', { method: 'POST', headers, body: JSON.stringify({ name, stages }) });
   if (!res.ok) throw new Error(`createBoard failed (${res.status})`);
@@ -232,6 +260,23 @@ export async function createAgent(name: string, capabilities: string[]): Promise
   const res = await fetch('/v1/agents', { method: 'POST', headers, body: JSON.stringify({ name, capabilities }) });
   if (!res.ok) throw new Error(`createAgent failed (${res.status})`);
   return (await res.json()) as AgentToken;
+}
+
+/** The agents registered in the signed-in user's workspace. */
+export async function getAgents(): Promise<Array<{ id: string; name: string; capabilities: string[] }>> {
+  const res = await fetch('/v1/agents', { headers });
+  if (!res.ok) throw new Error(`getAgents failed (${res.status})`);
+  return ((await res.json()) as { agents: Array<{ id: string; name: string; capabilities: string[] }> }).agents;
+}
+
+/** Remove a board from the workspace. */
+export function deleteBoard(boardId: string): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}`, { method: 'DELETE', headers });
+}
+
+/** Revoke an agent and all of its tokens. */
+export function deleteAgent(agentId: string): Promise<Response> {
+  return fetch(`/v1/agents/${agentId}`, { method: 'DELETE', headers });
 }
 
 /** Subscribe to the board's live event feed; `onEvent` fires on every server message. */
