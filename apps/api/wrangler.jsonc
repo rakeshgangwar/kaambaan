@@ -22,5 +22,12 @@
   "durable_objects": {
     "bindings": [{ "name": "BOARD_DO", "class_name": "BoardDO" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardDO"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardDO"] }],
+  // Serve the web SPA same-origin: static files are served directly; non-file routes fall back to
+  // index.html, and the Worker handles /v1, /auth, /mcp, /health (build: `pnpm --filter @kaambaan/web build`).
+  "assets": {
+    "directory": "../web/build",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  }
 }

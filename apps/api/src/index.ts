@@ -97,7 +97,11 @@ export default {
     }
 
     const match = path.match(/^\/v1\/boards(?:\/([^/]+))?(?:\/(.*))?$/);
-    if (!match) return new Response('Not Found', { status: 404 });
+    // Anything that isn't an API route is the web app: hand it to the static assets (SPA fallback).
+    if (!match) {
+      if (env.ASSETS) return env.ASSETS.fetch(request);
+      return new Response('Not Found', { status: 404 });
+    }
 
     const boardId = match[1];
     const rest = match[2] ?? '';

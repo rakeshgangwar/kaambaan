@@ -15,4 +15,6 @@ export interface Env {
   APP_URL?: string;
   /** When "true", accept dev-mode X-Tenant-Id / X-Agent-Id headers (local + tests). Never in prod. */
   DEV_AUTH?: string;
+  /** Static web assets (the SPA), served for non-API routes when deployed same-origin. */
+  ASSETS?: Fetcher;
 }
