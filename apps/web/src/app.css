@@ -1,54 +1,166 @@
 @import 'tailwindcss';
 
-/* shadcn-svelte design tokens, mapped to Tailwind v4 color utilities. Dark by default. */
+/*
+ * Kaambaan — "agent flight deck". काम (work) + बाण (arrow): directed work in flight.
+ * Indigo-ink ground, a saffron/marigold signature (the arrow / work-in-motion), and a disciplined
+ * instrument status vocabulary (teal = live, coral = needs-you). Telemetry renders in mono.
+ */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-ring: var(--ring);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--ink);
+  --color-foreground: var(--text);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-muted: var(--inset);
+  --color-muted-foreground: var(--muted);
+  --color-inset: var(--inset);
+  --color-surface: var(--surface);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-primary: var(--marigold);
+  --color-primary-foreground: var(--marigold-ink);
+  --color-accent: var(--accent-bg);
+  --color-accent-foreground: var(--text);
+  --color-destructive: var(--coral);
+  --color-destructive-foreground: var(--coral-ink);
+  --color-ring: var(--marigold);
+
+  /* signature semantic colors */
+  --color-marigold: var(--marigold);
+  --color-live: var(--live);
+  --color-coral: var(--coral);
+
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+
+  --radius-sm: 4px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(0.17 0.012 264);
-  --foreground: oklch(0.92 0.006 264);
-  --card: oklch(0.21 0.013 264);
-  --card-foreground: oklch(0.92 0.006 264);
-  --muted: oklch(0.27 0.012 264);
-  --muted-foreground: oklch(0.68 0.013 264);
-  --border: oklch(0.31 0.012 264);
-  --input: oklch(0.31 0.012 264);
-  --primary: oklch(0.72 0.13 250);
-  --primary-foreground: oklch(0.18 0.02 264);
-  --accent: oklch(0.31 0.02 264);
-  --accent-foreground: oklch(0.92 0.006 264);
-  --destructive: oklch(0.64 0.21 25);
-  --destructive-foreground: oklch(0.98 0.01 25);
-  --ring: oklch(0.72 0.13 250);
+  --ink: #0f1118;
+  --surface: #161924;
+  --inset: #1d2130;
+  --line: #282d3b;
+  --text: #eceaf2;
+  --muted: #8b91a8;
+  --marigold: #f4a526;
+  --marigold-ink: #1a1206;
+  --live: #34d3b6;
+  --coral: #ff6b57;
+  --coral-ink: #1c0805;
+  --accent-bg: #232838;
 }
 
 @layer base {
   * {
-    border-color: var(--color-border);
+    border-color: var(--line);
   }
   body {
-    background-color: var(--color-background);
-    color: var(--color-foreground);
-    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background-color: var(--ink);
+    color: var(--text);
+    font-family: var(--font-sans);
+    /* faint flight-grid: the deck the work moves across */
+    background-image:
+      radial-gradient(900px 380px at 78% -8%, rgba(244, 165, 38, 0.06), transparent 70%),
+      linear-gradient(var(--ink), var(--ink));
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: rgba(244, 165, 38, 0.28);
+  }
+  :focus-visible {
+    outline: 2px solid var(--marigold);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+}
+
+/* ---- signature: the directed flight-path ---- */
+@layer components {
+  .wordmark {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* the arrow head that joins two waypoints — work flows → */
+  .flow-arrow {
+    align-self: flex-start;
+    display: flex;
+    align-items: center;
+    height: 30px; /* aligns the chevron to the waypoint header row */
+    color: color-mix(in srgb, var(--marigold) 55%, transparent);
+    flex: none;
+  }
+  .flow-arrow::before {
+    content: '';
+    width: 30px;
+    height: 1.5px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, transparent, currentColor 85%);
+  }
+
+  /* the brand mark: a fletched arrow pointing in the direction of work */
+  .arrowmark {
+    width: 22px;
+    height: 22px;
+    color: var(--marigold);
+  }
+
+  .tile {
+    transition:
+      transform 0.12s ease,
+      border-color 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+  .tile:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--marigold) 35%, var(--line));
+  }
+  /* a card a human must act on: a coral edge marks the decision point */
+  .tile-gate {
+    border-left: 2px solid var(--coral);
+  }
+
+  .live-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--live);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 70%, transparent);
+    animation: pulse 2.4s ease-out infinite;
+  }
+  @keyframes pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 55%, transparent);
+    }
+    70% {
+      box-shadow: 0 0 0 6px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+  .tile {
+    transition: none;
   }
 }

@@ -12,20 +12,20 @@ test('renders the pipeline columns and connects live', async ({ page }) => {
   for (const col of ['Backlog', 'Ready', 'In Progress', 'Review', 'Done']) {
     await expect(page.getByText(col, { exact: true })).toBeVisible();
   }
-  await expect(page.getByText('● live')).toBeVisible();
+  await expect(page.getByText('live', { exact: true })).toBeVisible();
 });
 
 test('creates a card via the composer', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('New card title').fill('Write the launch post');
-  await page.getByRole('button', { name: 'Add card' }).click();
+  await page.getByRole('button', { name: 'Dispatch' }).click();
   await expect(page.getByText('Write the launch post')).toBeVisible();
 });
 
 test('moves a card to another column via drag', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('New card title').fill('Draggable task');
-  await page.getByRole('button', { name: 'Add card' }).click();
+  await page.getByRole('button', { name: 'Dispatch' }).click();
 
   const card = page.locator('article', { hasText: 'Draggable task' });
   await expect(card).toBeVisible();
@@ -55,7 +55,7 @@ test('streams a new card to a second client in real time', async ({ browser }) =
   await expect(b.getByText('Backlog', { exact: true })).toBeVisible();
 
   await a.getByLabel('New card title').fill('Realtime card');
-  await a.getByRole('button', { name: 'Add card' }).click();
+  await a.getByRole('button', { name: 'Dispatch' }).click();
 
   await expect(b.getByText('Realtime card')).toBeVisible({ timeout: 10_000 });
 });
