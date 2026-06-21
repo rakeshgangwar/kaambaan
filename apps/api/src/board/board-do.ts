@@ -11,6 +11,13 @@ const HEARTBEAT_TIMEOUT_MS = 15 * 60 * 1000;
 /** Consecutive failed/reclaimed runs before a card auto-blocks for a human (docs/08 §4, ⚠️ OPEN). */
 const CIRCUIT_BREAKER_LIMIT = 2;
 
+/** The decisions a human can take at an approval gate (docs/08 §6). */
+const DEFAULT_GATE_OPTIONS: GateOption[] = [
+  { name: 'approve', title: 'Approve' },
+  { name: 'request_changes', title: 'Request changes', interactive: true },
+  { name: 'reject', title: 'Reject' },
+];
+
 /** A pipeline stage (board column). `ownerKind`/`owner` drive agent claim routing (docs/01, docs/04). */
 export interface StageDef {
   key: string;
@@ -50,12 +57,34 @@ export interface BoardEvent {
   ts: string;
 }
 
+/** A choice presented to a human at an approval gate (HumanLayer-style options, docs/08 §6). */
+export interface GateOption {
+  name: string;
+  title: string;
+  promptFill?: string;
+  interactive?: boolean;
+}
+
+export type GateDecision = 'approve' | 'request_changes' | 'reject';
+
+export interface GateView {
+  id: string;
+  cardId: string;
+  stageKey: string;
+  status: 'pending' | 'resolved';
+  decision: string | null;
+  options: GateOption[];
+  producedBy: string;
+  createdAt: string;
+}
+
 export interface BoardSnapshot {
   boardId: string | null;
   tenantId: string | null;
   name: string | null;
   stages: StageDef[];
   cards: CardView[];
+  gates: GateView[];
 }
 
 /** The outcome of an agent claim — either work to do, or nothing available (docs/04 §3). */
@@ -82,7 +111,10 @@ export type BoardErrorCode =
   | 'UNKNOWN_STAGE'
   | 'WIP_LIMIT'
   | 'CARD_NOT_FOUND'
-  | 'STALE_LEASE';
+  | 'STALE_LEASE'
+  | 'GATE_NOT_FOUND'
+  | 'GATE_NOT_PENDING'
+  | 'SEPARATION_OF_DUTIES';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; code: BoardErrorCode; message: string };
 
@@ -106,6 +138,13 @@ export interface BoardStub {
   block(input: { runId: string; leaseEpoch: number; reason: string }): Promise<Result<CardView>>;
   fail(input: { runId: string; leaseEpoch: number; reason: string }): Promise<Result<CardView>>;
   release(input: { runId: string; leaseEpoch: number; reason?: string }): Promise<Result<CardView>>;
+  submitForReview(input: { runId: string; leaseEpoch: number; output?: JsonValue }): Promise<Result<CardView>>;
+  resolveGate(input: {
+    gateId: string;
+    decision: GateDecision;
+    decidedBy: string;
+    comment?: string;
+  }): Promise<Result<CardView>>;
   fetch(request: Request): Promise<Response>;
 }
 
@@ -195,6 +234,23 @@ export class BoardDO extends DurableObject<Env> {
         ts TEXT NOT NULL
       )`,
     );
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS gates (
+        id TEXT PRIMARY KEY,
+        card_id TEXT NOT NULL,
+        stage_key TEXT NOT NULL,
+        return_stage_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        decision TEXT,
+        comment TEXT,
+        produced_by TEXT NOT NULL DEFAULT '',
+        decided_by TEXT,
+        options_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+      )`,
+    );
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gates_card ON gates(card_id)`);
   }
 
   // ----- RPC: board lifecycle -----
@@ -404,29 +460,83 @@ export class BoardDO extends DurableObject<Env> {
 
     const card = this.mustGetCard(cardId);
     const handoffJson = input.handoff !== undefined ? JSON.stringify(input.handoff) : null;
-    const stages = this.stages();
-    const next = stages[stages.findIndex((s) => s.key === card.currentStageKey) + 1];
-    if (next) {
+    this.advanceCard(cardId, card.currentStageKey, run.agent_id as string, handoffJson);
+    await this.scheduleReclaim();
+    return { ok: true, value: this.mustGetCard(cardId) };
+  }
+
+  /** Submit a gated, agent-worked stage for human approval (docs/04, docs/08 §6). */
+  async submitForReview(input: { runId: string; leaseEpoch: number; output?: JsonValue }): Promise<Result<CardView>> {
+    const run = this.getActiveRunRow(input.runId, input.leaseEpoch);
+    if (!run) return this.staleLease();
+    const cardId = run.card_id as string;
+    const now = this.now();
+    this.sql.exec(`UPDATE runs SET status = 'ended', outcome = 'submitted', ended_at = ? WHERE id = ?`, now, input.runId);
+    const card = this.mustGetCard(cardId);
+    this.sql.exec(
+      `UPDATE cards SET state = 'input-required', delegate_agent_id = NULL, current_run_id = NULL, updated_at = ? WHERE id = ?`,
+      now,
+      cardId,
+    );
+    // request_changes returns to the same (worked) stage so the agent can redo it.
+    this.createGate(cardId, card.currentStageKey, card.currentStageKey, run.agent_id as string);
+    await this.scheduleReclaim();
+    return { ok: true, value: this.mustGetCard(cardId) };
+  }
+
+  /** Resolve a pending approval gate (docs/08 §6). Enforces separation of duties. */
+  async resolveGate(input: {
+    gateId: string;
+    decision: GateDecision;
+    decidedBy: string;
+    comment?: string;
+  }): Promise<Result<CardView>> {
+    const gate = this.sql.exec(`SELECT * FROM gates WHERE id = ?`, input.gateId).toArray()[0];
+    if (!gate) return { ok: false, code: 'GATE_NOT_FOUND', message: `gate not found: ${input.gateId}` };
+    if ((gate.status as string) !== 'pending') {
+      return { ok: false, code: 'GATE_NOT_PENDING', message: 'gate is already resolved' };
+    }
+    if (input.decidedBy === (gate.produced_by as string)) {
+      return { ok: false, code: 'SEPARATION_OF_DUTIES', message: 'the producer cannot resolve their own gate' };
+    }
+    const cardId = gate.card_id as string;
+    const now = this.now();
+    this.sql.exec(
+      `UPDATE gates SET status = 'resolved', decision = ?, comment = ?, decided_by = ?, resolved_at = ? WHERE id = ?`,
+      input.decision,
+      input.comment ?? null,
+      input.decidedBy,
+      now,
+      input.gateId,
+    );
+    if (input.decision === 'approve') {
+      // The approver becomes the producer of any chained gate (keeps separation-of-duties intact).
+      this.advanceCard(cardId, gate.stage_key as string, input.decidedBy, this.getCardHandoffJson(cardId));
+    } else if (input.decision === 'request_changes') {
+      // Keep the agent's prior handoff and add the reviewer's feedback so rework has full context.
+      const prior = this.parseHandoff(this.getCardHandoffJson(cardId));
+      const merged =
+        prior && typeof prior === 'object' && !Array.isArray(prior)
+          ? { ...prior, feedback: input.comment ?? null }
+          : { feedback: input.comment ?? null };
       this.sql.exec(
         `UPDATE cards SET current_stage_key = ?, state = 'submitted', delegate_agent_id = NULL,
          current_run_id = NULL, failure_count = 0, handoff_json = ?, updated_at = ? WHERE id = ?`,
-        next.key,
-        handoffJson,
+        gate.return_stage_key,
+        JSON.stringify(merged),
         now,
         cardId,
       );
-      this.emit('card.advanced', { cardId, from: card.currentStageKey, to: next.key });
+      this.emit('card.changes_requested', { cardId, gateId: input.gateId, to: gate.return_stage_key });
     } else {
       this.sql.exec(
-        `UPDATE cards SET state = 'completed', delegate_agent_id = NULL, current_run_id = NULL,
-         failure_count = 0, handoff_json = ?, updated_at = ? WHERE id = ?`,
-        handoffJson,
+        `UPDATE cards SET state = 'rejected', delegate_agent_id = NULL, current_run_id = NULL, updated_at = ? WHERE id = ?`,
         now,
         cardId,
       );
-      this.emit('card.completed', { cardId });
+      this.emit('card.rejected', { cardId, gateId: input.gateId });
     }
-    await this.scheduleReclaim();
+    this.emit('gate.resolved', { gateId: input.gateId, cardId, decision: input.decision, decidedBy: input.decidedBy });
     return { ok: true, value: this.mustGetCard(cardId) };
   }
 
@@ -545,6 +655,83 @@ export class BoardDO extends DurableObject<Env> {
     this.emit(event, { cardId, runId: runId ?? null, reason, failures, brokeCircuit: state === 'input-required' });
   }
 
+  /** Advance a card to the next stage — opening an approval gate on entry to a human review stage. */
+  private advanceCard(cardId: string, fromStageKey: string, producedBy: string, handoffJson: string | null): void {
+    const stages = this.stages();
+    const idx = stages.findIndex((s) => s.key === fromStageKey);
+    if (idx === -1) return; // unknown stage — never silently advance to stage[0]
+    const next = stages[idx + 1];
+    const now = this.now();
+    if (!next) {
+      this.sql.exec(
+        `UPDATE cards SET state = 'completed', delegate_agent_id = NULL, current_run_id = NULL, failure_count = 0, handoff_json = ?, updated_at = ? WHERE id = ?`,
+        handoffJson,
+        now,
+        cardId,
+      );
+      this.emit('card.completed', { cardId });
+      return;
+    }
+    const gated = next.gate === 'approval' && !this.isAgentClaimable(next);
+    this.sql.exec(
+      `UPDATE cards SET current_stage_key = ?, state = ?, delegate_agent_id = NULL, current_run_id = NULL, failure_count = 0, handoff_json = ?, updated_at = ? WHERE id = ?`,
+      next.key,
+      gated ? 'input-required' : 'submitted',
+      handoffJson,
+      now,
+      cardId,
+    );
+    this.emit('card.advanced', { cardId, from: fromStageKey, to: next.key });
+    if (gated) this.createGate(cardId, next.key, fromStageKey, producedBy);
+  }
+
+  private createGate(cardId: string, stageKey: string, returnStageKey: string, producedBy: string): string {
+    const id = newId('gate');
+    const now = this.now();
+    this.sql.exec(
+      `INSERT INTO gates (id, card_id, stage_key, return_stage_key, status, produced_by, options_json, created_at)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      id,
+      cardId,
+      stageKey,
+      returnStageKey,
+      producedBy,
+      JSON.stringify(DEFAULT_GATE_OPTIONS),
+      now,
+    );
+    this.emit('gate.opened', { gateId: id, cardId, stageKey });
+    return id;
+  }
+
+  private isAgentClaimable(stage: StageDef): boolean {
+    return stage.ownerKind === 'capability' || stage.ownerKind === 'agent';
+  }
+
+  private getCardHandoffJson(cardId: string): string | null {
+    const row = this.getCardRow(cardId);
+    return row ? ((row.handoff_json as string | null) ?? null) : null;
+  }
+
+  private parseHandoff(raw: string | null): JsonValue | null {
+    return raw ? (JSON.parse(raw) as JsonValue) : null;
+  }
+
+  private pendingGates(): GateView[] {
+    return this.sql
+      .exec(`SELECT * FROM gates WHERE status = 'pending' ORDER BY created_at ASC`)
+      .toArray()
+      .map((r) => ({
+        id: r.id as string,
+        cardId: r.card_id as string,
+        stageKey: r.stage_key as string,
+        status: r.status as 'pending' | 'resolved',
+        decision: (r.decision as string | null) ?? null,
+        options: JSON.parse(r.options_json as string) as GateOption[],
+        producedBy: r.produced_by as string,
+        createdAt: r.created_at as string,
+      }));
+  }
+
   private stageMatches(stage: StageDef, agentId: string, capabilities: string[]): boolean {
     if (stage.ownerKind === 'agent') return stage.owner === agentId;
     if (stage.ownerKind === 'capability') return stage.owner !== undefined && capabilities.includes(stage.owner);
@@ -650,6 +837,7 @@ export class BoardDO extends DurableObject<Env> {
       name: this.getMeta('name'),
       stages: this.stages(),
       cards: boardId ? this.allCards() : [],
+      gates: boardId ? this.pendingGates() : [],
     };
   }
 

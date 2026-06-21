@@ -22,12 +22,30 @@ export interface Card {
   priority: number;
 }
 
+export interface GateOption {
+  name: string;
+  title: string;
+  interactive?: boolean;
+}
+
+export interface Gate {
+  id: string;
+  cardId: string;
+  stageKey: string;
+  status: string;
+  options: GateOption[];
+  producedBy: string;
+}
+
+export type GateDecision = 'approve' | 'request_changes' | 'reject';
+
 export interface BoardSnapshot {
   boardId: string | null;
   tenantId: string | null;
   name: string | null;
   stages: Stage[];
   cards: Card[];
+  gates: Gate[];
 }
 
 export const DEFAULT_STAGES: Stage[] = [
@@ -66,6 +84,20 @@ export function moveCard(boardId: string, cardId: string, toStageKey: string): P
     method: 'POST',
     headers,
     body: JSON.stringify({ toStageKey }),
+  });
+}
+
+/** Resolve an approval gate. The dev resolver is `usr_dev`; real auth supplies the user. */
+export function resolveGate(
+  boardId: string,
+  gateId: string,
+  decision: GateDecision,
+  comment?: string,
+): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/gates/${gateId}/resolve`, {
+    method: 'POST',
+    headers: { ...headers, 'X-User-Id': 'usr_dev' },
+    body: JSON.stringify({ decision, comment }),
   });
 }
 

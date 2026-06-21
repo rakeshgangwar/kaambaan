@@ -5,9 +5,11 @@
     getBoard,
     createCard,
     moveCard,
+    resolveGate,
     openBoardSocket,
     DEFAULT_STAGES,
     type BoardSnapshot,
+    type GateDecision,
   } from '$lib/api';
   import { Button } from '$lib/components/ui/button';
   import { cardDraggable, columnDropTarget } from '$lib/dnd';
@@ -86,6 +88,22 @@
   function cardsIn(stageKey: string): BoardSnapshot['cards'] {
     return board ? board.cards.filter((c) => c.currentStageKey === stageKey) : [];
   }
+
+  function gateFor(cardId: string): BoardSnapshot['gates'][number] | undefined {
+    return board?.gates.find((g) => g.cardId === cardId);
+  }
+
+  async function onResolve(gateId: string, decision: GateDecision): Promise<void> {
+    if (!boardId) return;
+    const res = await resolveGate(boardId, gateId, decision);
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+      error = body?.error?.message ?? `Resolve failed (${res.status})`;
+    } else {
+      error = null;
+    }
+    await refresh();
+  }
 </script>
 
 <main class="min-h-screen p-6">
@@ -160,6 +178,16 @@
               >
                 <div class="text-sm leading-snug">{card.title}</div>
                 <div class="text-muted-foreground mt-1.5 text-xs">{card.ownerUserId}</div>
+                {#if gateFor(card.id)}
+                  {@const gate = gateFor(card.id)!}
+                  <div class="mt-2 flex flex-wrap gap-1.5">
+                    <Button size="sm" onclick={() => onResolve(gate.id, 'approve')}>Approve</Button>
+                    <Button size="sm" variant="outline" onclick={() => onResolve(gate.id, 'request_changes')}>
+                      Changes
+                    </Button>
+                    <Button size="sm" variant="ghost" onclick={() => onResolve(gate.id, 'reject')}>Reject</Button>
+                  </div>
+                {/if}
               </article>
             {/each}
           </div>
