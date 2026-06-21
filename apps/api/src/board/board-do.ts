@@ -314,6 +314,7 @@ export interface BoardStub {
   setBudget(input: { boardUsdCap?: number | null; cardUsdCap?: number | null }): Promise<Result<{ ok: true }>>;
   getUsage(opts?: { window?: string }): Promise<UsageSummary>;
   getAttempts(cardId: string): Promise<AttemptView[]>;
+  countReadyForCapabilities(agentId: string, capabilities: string[]): Promise<number>;
   getCardActivities(cardId: string): Promise<{ activities: ActivityView[]; handoff: JsonValue | null }>;
   estimateCardCost(cardId: string): Promise<Result<EstimateView>>;
   getNotifications(opts?: { unreadOnly?: boolean }): Promise<NotificationView[]>;
@@ -1104,6 +1105,21 @@ export class BoardDO extends DurableObject<Env> {
         };
       });
     return { activities, handoff: this.parseHandoff(this.getCardHandoffJson(cardId)) };
+  }
+
+  /** How many cards are ready (submitted) in stages these capabilities can claim — for work discovery. */
+  async countReadyForCapabilities(agentId: string, capabilities: string[]): Promise<number> {
+    if (!this.getMeta('boardId')) return 0;
+    const claimableKeys = this.stages()
+      .filter((s) => this.stageMatches(s, agentId, capabilities))
+      .map((s) => s.key);
+    if (claimableKeys.length === 0) return 0;
+    const placeholders = claimableKeys.map(() => '?').join(', ');
+    return Number(
+      this.sql
+        .exec(`SELECT COUNT(*) AS n FROM cards WHERE state = 'submitted' AND current_stage_key IN (${placeholders})`, ...claimableKeys)
+        .one().n,
+    );
   }
 
   /** The attempts (runs) for a card, newest-stage-first, with each run's cost and model (docs/07 §5). */
