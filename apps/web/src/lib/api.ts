@@ -262,6 +262,24 @@ export async function createAgent(name: string, capabilities: string[]): Promise
   return (await res.json()) as AgentToken;
 }
 
+export interface Estimate {
+  stageKey: string;
+  estimatedUsd: number | null;
+  sampleSize: number;
+}
+
+/** Set or clear the board / per-card USD budget caps (pass null to clear). */
+export function setBudget(boardId: string, caps: { boardUsdCap?: number | null; cardUsdCap?: number | null }): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/budget`, { method: 'PUT', headers, body: JSON.stringify(caps) });
+}
+
+/** Pre-run cost estimate for a card's current stage, from history (docs/07 §6). */
+export async function getEstimate(boardId: string, cardId: string): Promise<Estimate | null> {
+  const res = await fetch(`/v1/boards/${boardId}/cards/${cardId}/estimate`, { headers });
+  if (!res.ok) return null;
+  return (await res.json()) as Estimate;
+}
+
 /** The agents registered in the signed-in user's workspace. */
 export async function getAgents(): Promise<Array<{ id: string; name: string; capabilities: string[] }>> {
   const res = await fetch('/v1/agents', { headers });
