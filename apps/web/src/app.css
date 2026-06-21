@@ -135,6 +135,20 @@
     border-left: 2px solid var(--coral);
   }
 
+  .drawer-in {
+    animation: drawer-in 0.16s ease-out;
+  }
+  @keyframes drawer-in {
+    from {
+      transform: translateX(12px);
+      opacity: 0.4;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
   .live-dot {
     width: 7px;
     height: 7px;
@@ -157,7 +171,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .live-dot {
+  .live-dot,
+  .drawer-in {
     animation: none;
   }
   .tile {

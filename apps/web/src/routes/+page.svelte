@@ -8,12 +8,14 @@
     resolveGate,
     openBoardSocket,
     getAttempts,
+    getCardActivities,
     getNotifications,
     markNotificationRead,
     DEFAULT_STAGES,
     type BoardSnapshot,
     type GateDecision,
     type Attempt,
+    type CardActivities,
     type Notification,
   } from '$lib/api';
   import { Button } from '$lib/components/ui/button';
@@ -29,8 +31,12 @@
 
   let notifications = $state<Notification[]>([]);
   let showNotifications = $state(false);
-  let attemptsByCard = $state<Record<string, Attempt[]>>({});
-  let openAttempts = $state<string | null>(null);
+
+  // card drawer (session replay, docs/07 §4)
+  let openCardId = $state<string | null>(null);
+  let cardDetail = $state<CardActivities | null>(null);
+  let drawerAttempts = $state<Attempt[]>([]);
+  let gateComment = $state('');
 
   let boardId: string | null = null;
 
@@ -39,8 +45,49 @@
     try {
       board = await getBoard(boardId);
       notifications = await getNotifications(boardId);
+      await refreshDrawer();
     } catch (e) {
       error = String(e);
+    }
+  }
+
+  const openCard = $derived(board && openCardId ? (board.cards.find((c) => c.id === openCardId) ?? null) : null);
+  const openCardGate = $derived(openCardId ? gateFor(openCardId) : undefined);
+
+  async function openDrawer(cardId: string): Promise<void> {
+    openCardId = cardId;
+    gateComment = '';
+    await refreshDrawer();
+  }
+
+  function closeDrawer(): void {
+    openCardId = null;
+    cardDetail = null;
+    drawerAttempts = [];
+  }
+
+  async function refreshDrawer(): Promise<void> {
+    if (!openCardId || !boardId) return;
+    try {
+      [cardDetail, drawerAttempts] = await Promise.all([getCardActivities(boardId, openCardId), getAttempts(boardId, openCardId)]);
+    } catch {
+      /* drawer detail is best-effort */
+    }
+  }
+
+  function activityMarker(type: string): { glyph: string; color: string } {
+    if (type === 'action') return { glyph: '▸', color: 'var(--marigold)' };
+    if (type === 'response') return { glyph: '●', color: 'var(--live)' };
+    if (type === 'error') return { glyph: '✕', color: 'var(--coral)' };
+    if (type === 'elicitation') return { glyph: '?', color: 'var(--coral)' };
+    return { glyph: '·', color: 'var(--muted)' }; // thought
+  }
+
+  function fmtTime(ts: string): string {
+    try {
+      return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch {
+      return ts;
     }
   }
 
@@ -50,15 +97,6 @@
     if (!boardId) return;
     await markNotificationRead(boardId, seq);
     await refresh();
-  }
-
-  async function toggleAttempts(cardId: string): Promise<void> {
-    if (openAttempts === cardId) {
-      openAttempts = null;
-      return;
-    }
-    if (boardId) attemptsByCard[cardId] = await getAttempts(boardId, cardId);
-    openAttempts = cardId;
   }
 
   onMount(() => {
@@ -159,18 +197,28 @@
     return `$${n.toFixed(2)}`;
   }
 
-  async function onResolve(gateId: string, decision: GateDecision): Promise<void> {
+  async function onResolve(gateId: string, decision: GateDecision, comment?: string): Promise<void> {
     if (!boardId) return;
-    const res = await resolveGate(boardId, gateId, decision);
+    const res = await resolveGate(boardId, gateId, decision, comment?.trim() || undefined);
     if (!res.ok) {
       const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
       error = body?.error?.message ?? `Resolve failed (${res.status})`;
     } else {
       error = null;
+      closeDrawer();
     }
     await refresh();
   }
 </script>
+
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === 'Escape') {
+      closeDrawer();
+      showNotifications = false;
+    }
+  }}
+/>
 
 <main class="min-h-screen px-5 py-5 sm:px-7">
   {#if !board}
@@ -319,9 +367,19 @@
             {/if}
             {#each cards as card (card.id)}
               {@const gate = gateFor(card.id)}
-              <article
+              <div
                 use:cardDraggable={{ cardId: card.id }}
-                class="tile bg-inset border-border cursor-grab rounded-[10px] border p-3 active:cursor-grabbing {gate ? 'tile-gate' : ''}"
+                role="button"
+                tabindex="0"
+                aria-label="Open {card.title}"
+                onclick={() => openDrawer(card.id)}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    openDrawer(card.id);
+                  }
+                }}
+                class="tile bg-inset border-border cursor-grab rounded-[10px] border p-3 text-left active:cursor-grabbing {gate ? 'tile-gate' : ''}"
               >
                 <div class="flex items-start justify-between gap-2">
                   <div class="text-[13px] leading-snug">{card.title}</div>
@@ -341,7 +399,7 @@
                       {@const href = safeHref(ref.url)}
                       {@const inner = `${refLabel(ref)}${subStateLabel(ref) ? ` · ${subStateLabel(ref)}` : ''}`}
                       {#if href}
-                        <a {href} target="_blank" rel="noreferrer" title={ref.url} class="border-border hover:border-marigold/50 mono inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10px]">
+                        <a {href} target="_blank" rel="noreferrer" title={ref.url} onclick={(e) => e.stopPropagation()} class="border-border hover:border-marigold/50 mono inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10px]">
                           <span style="color:var(--marigold)">↗</span>{inner}
                         </a>
                       {:else}
@@ -352,36 +410,133 @@
                 {/if}
 
                 {#if card.attemptCount > 1}
-                  <button onclick={() => toggleAttempts(card.id)} class="text-muted-foreground hover:text-foreground mono mt-2 text-[11px]">
-                    ×{card.attemptCount} attempts {openAttempts === card.id ? '▾' : '▸'}
-                  </button>
-                  {#if openAttempts === card.id && attemptsByCard[card.id]}
-                    <div class="border-border mt-1.5 space-y-1 border-l pl-2.5">
-                      {#each attemptsByCard[card.id] as a, i (a.runId)}
-                        <div class="mono flex items-center justify-between gap-2 text-[10px]">
-                          <span class="text-muted-foreground">{i + 1} · {a.agentId}{a.profileKey ? ` · ${a.profileKey}` : a.model ? ` · ${a.model}` : ''}</span>
-                          <span>{fmtUsd(a.costUsd)}{a.outcome ? ` · ${a.outcome}` : ''}</span>
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
+                  <div class="text-muted-foreground mono mt-2 text-[11px]">×{card.attemptCount} attempts</div>
                 {/if}
 
                 {#if gate}
                   <div class="border-border mt-2.5 border-t pt-2.5">
                     <div class="eyebrow text-coral mb-1.5">awaiting your review</div>
                     <div class="flex flex-wrap gap-1.5">
-                      <Button size="sm" onclick={() => onResolve(gate.id, 'approve')}>Approve</Button>
-                      <Button size="sm" variant="outline" onclick={() => onResolve(gate.id, 'request_changes')}>Changes</Button>
-                      <Button size="sm" variant="ghost" onclick={() => onResolve(gate.id, 'reject')}>Reject</Button>
+                      <Button size="sm" onclick={(e) => { e.stopPropagation(); onResolve(gate.id, 'approve'); }}>Approve</Button>
+                      <Button size="sm" variant="outline" onclick={(e) => { e.stopPropagation(); openDrawer(card.id); }}>Changes…</Button>
+                      <Button size="sm" variant="ghost" onclick={(e) => { e.stopPropagation(); onResolve(gate.id, 'reject'); }}>Reject</Button>
                     </div>
                   </div>
                 {/if}
-              </article>
+              </div>
             {/each}
           </div>
         </section>
       {/each}
+    </div>
+  {/if}
+
+  <!-- card drawer: session replay (docs/07 §4) -->
+  {#if openCard}
+    {@const stageName = board?.stages.find((s) => s.key === openCard.currentStageKey)?.name ?? openCard.currentStageKey}
+    <div class="fixed inset-0 z-30 flex justify-end">
+      <button class="absolute inset-0 bg-black/55" onclick={closeDrawer} aria-label="Close drawer" tabindex="-1"></button>
+      <aside class="bg-surface border-border drawer-in relative flex h-full w-full max-w-[460px] flex-col border-l shadow-2xl">
+        <div class="border-border flex items-start justify-between gap-3 border-b p-4">
+          <div class="min-w-0">
+            <div class="eyebrow mb-1.5">{stageName} · {openCard.state}</div>
+            <h2 class="wordmark text-base leading-snug">{openCard.title}</h2>
+            <div class="text-muted-foreground mono mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px]">
+              <span>{openCard.ownerUserId}</span>
+              {#if openCard.costUsd > 0}<span class={openCard.overBudget ? 'text-coral' : ''}>{fmtUsd(openCard.costUsd)}</span>{/if}
+              {#if openCard.state === 'working'}<span class="inline-flex items-center gap-1.5"><span class="live-dot"></span><span style="color:var(--live)">working</span></span>{/if}
+            </div>
+          </div>
+          <button onclick={closeDrawer} class="text-muted-foreground hover:text-foreground hover:bg-accent shrink-0 rounded-[7px] p-1.5" aria-label="Close">
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+
+        <div class="flex-1 space-y-6 overflow-y-auto p-4">
+          {#if refsFor(openCard.id).length > 0}
+            <section>
+              <div class="eyebrow mb-2">references</div>
+              <div class="flex flex-wrap gap-1.5">
+                {#each refsFor(openCard.id) as ref (ref.id)}
+                  {@const href = safeHref(ref.url)}
+                  {@const inner = `${refLabel(ref)}${subStateLabel(ref) ? ` · ${subStateLabel(ref)}` : ''}`}
+                  {#if href}
+                    <a {href} target="_blank" rel="noreferrer" class="border-border hover:border-marigold/50 mono inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10px]"><span style="color:var(--marigold)">↗</span>{inner}</a>
+                  {:else}
+                    <span class="border-border mono inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10px]">{inner}</span>
+                  {/if}
+                {/each}
+              </div>
+            </section>
+          {/if}
+
+          {#if cardDetail?.handoff}
+            <section>
+              <div class="eyebrow mb-2">handoff from prior stage</div>
+              <div class="bg-inset border-border mono space-y-1 rounded-[8px] border p-3 text-[11px]">
+                {#each Object.entries(cardDetail.handoff) as [k, v] (k)}
+                  <div><span class="text-muted-foreground">{k}:</span> {typeof v === 'string' ? v : JSON.stringify(v)}</div>
+                {/each}
+              </div>
+            </section>
+          {/if}
+
+          {#if drawerAttempts.length > 1}
+            <section>
+              <div class="eyebrow mb-2">attempts · {drawerAttempts.length}</div>
+              <div class="space-y-1.5">
+                {#each drawerAttempts as a, i (a.runId)}
+                  <div class="bg-inset border-border mono flex items-center justify-between gap-2 rounded-[7px] border px-2.5 py-1.5 text-[11px]">
+                    <span class="text-muted-foreground truncate">{i + 1} · {a.agentId}{a.profileKey ? ` · ${a.profileKey}` : a.model ? ` · ${a.model}` : ''}</span>
+                    <span class="shrink-0">{fmtUsd(a.costUsd)}{a.outcome ? ` · ${a.outcome}` : ''}</span>
+                  </div>
+                {/each}
+              </div>
+            </section>
+          {/if}
+
+          <section>
+            <div class="eyebrow mb-3">session replay</div>
+            {#if !cardDetail || cardDetail.activities.length === 0}
+              <p class="text-muted-foreground text-xs">No recorded activity yet — this card hasn't been worked.</p>
+            {:else}
+              <ol class="border-border ml-1 space-y-4 border-l pl-4">
+                {#each cardDetail.activities as a (a.seq)}
+                  {@const m = activityMarker(a.type)}
+                  <li class="relative">
+                    <span class="mono absolute -left-[22px] top-px text-[12px]" style="color:{m.color}">{m.glyph}</span>
+                    <div class="flex items-baseline justify-between gap-2">
+                      <span class="eyebrow" style="color:{m.color}">{a.type}</span>
+                      <span class="text-muted-foreground mono text-[10px]">{fmtTime(a.ts)}</span>
+                    </div>
+                    {#if a.action}
+                      <div class="mono mt-1 text-[11px]"><span style="color:var(--marigold)">{a.action}</span>{#if a.parameter}<span class="text-muted-foreground"> {JSON.stringify(a.parameter).slice(0, 140)}</span>{/if}</div>
+                    {/if}
+                    {#if a.body}<div class="mt-1 text-xs leading-relaxed {a.type === 'error' ? 'text-coral' : 'text-foreground/90'}">{a.body}</div>{/if}
+                  </li>
+                {/each}
+              </ol>
+            {/if}
+          </section>
+        </div>
+
+        {#if openCardGate}
+          <div class="border-border bg-surface border-t p-4">
+            <div class="eyebrow text-coral mb-2">awaiting your review</div>
+            <textarea
+              bind:value={gateComment}
+              rows="2"
+              placeholder="Feedback for the agent — sent on Request changes…"
+              class="bg-inset border-border focus:border-marigold mb-2.5 w-full resize-none rounded-[7px] border px-2.5 py-2 text-xs outline-none"
+            ></textarea>
+            <div class="flex flex-wrap gap-1.5">
+              <Button size="sm" onclick={() => onResolve(openCardGate.id, 'approve', gateComment)}>Approve</Button>
+              <Button size="sm" variant="outline" onclick={() => onResolve(openCardGate.id, 'request_changes', gateComment)}>Request changes</Button>
+              <Button size="sm" variant="ghost" onclick={() => onResolve(openCardGate.id, 'reject', gateComment)}>Reject</Button>
+            </div>
+          </div>
+        {/if}
+      </aside>
     </div>
   {/if}
 </main>
