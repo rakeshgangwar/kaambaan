@@ -17,6 +17,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",
     "@cloudflare/workers-types": "^4.20260619.1",
+    "@kaambaan/agent-sdk": "workspace:*",
     "wrangler": "^4.103.0"
   }
 }

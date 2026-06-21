@@ -12,6 +12,8 @@ import {
   type BoardSnapshot,
   type BoardStub,
   type BoardErrorCode,
+  type AgentActivityType,
+  type Result,
   type JsonValue,
 } from './board/board-do';
 import type { Env } from './env';
@@ -41,6 +43,8 @@ function statusForCode(code: BoardErrorCode): number {
     case 'CARD_NOT_FOUND':
     case 'NOT_INITIALIZED':
       return 404;
+    case 'STALE_LEASE':
+      return 409;
   }
 }
 
@@ -104,6 +108,74 @@ export default {
         const result = await stub.moveCard(moveMatch[1]!, body.toStageKey);
         if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
         return Response.json({ card: result.value });
+      }
+
+      // POST /v1/boards/:id/claims — an agent claims a ready card (docs/04 §3)
+      if (rest === 'claims' && request.method === 'POST') {
+        const agentId = request.headers.get('X-Agent-Id');
+        if (!agentId || agentId.trim() === '') {
+          return Response.json({ error: 'X-Agent-Id required' }, { status: 400 });
+        }
+        const payload = (await request.json()) as { capabilities?: string[]; maxConcurrency?: number };
+        const claimResult = await stub.claim({
+          agentId,
+          capabilities: payload.capabilities ?? [],
+          maxConcurrency: payload.maxConcurrency,
+        });
+        return Response.json(claimResult);
+      }
+
+      // POST /v1/boards/:id/runs/:runId/:action — agent run verbs (docs/04 §3)
+      const runMatch = rest.match(/^runs\/([^/]+)\/([^/]+)$/);
+      if (runMatch && request.method === 'POST') {
+        const runId = runMatch[1]!;
+        const action = runMatch[2]!;
+        const p = (await request.json()) as {
+          leaseEpoch: number;
+          type?: AgentActivityType;
+          ephemeral?: boolean;
+          body?: string;
+          action?: string;
+          parameter?: JsonValue;
+          result?: JsonValue;
+          signal?: string;
+          handoff?: JsonValue;
+          reason?: string;
+        };
+        const respond = (r: Result<unknown>, key: string): Response =>
+          r.ok
+            ? Response.json({ [key]: r.value })
+            : Response.json({ error: r }, { status: statusForCode(r.code) });
+
+        switch (action) {
+          case 'heartbeat':
+            return respond(await stub.heartbeat({ runId, leaseEpoch: p.leaseEpoch }), 'run');
+          case 'activities':
+            return respond(
+              await stub.postActivity({
+                runId,
+                leaseEpoch: p.leaseEpoch,
+                type: p.type ?? 'thought',
+                ephemeral: p.ephemeral,
+                body: p.body,
+                action: p.action,
+                parameter: p.parameter,
+                result: p.result,
+                signal: p.signal,
+              }),
+              'activity',
+            );
+          case 'complete':
+            return respond(await stub.complete({ runId, leaseEpoch: p.leaseEpoch, handoff: p.handoff }), 'card');
+          case 'block':
+            return respond(await stub.block({ runId, leaseEpoch: p.leaseEpoch, reason: p.reason ?? '' }), 'card');
+          case 'fail':
+            return respond(await stub.fail({ runId, leaseEpoch: p.leaseEpoch, reason: p.reason ?? '' }), 'card');
+          case 'release':
+            return respond(await stub.release({ runId, leaseEpoch: p.leaseEpoch }), 'card');
+          default:
+            return Response.json({ error: `unknown run action: ${action}` }, { status: 404 });
+        }
       }
 
       return Response.json({ error: 'method not allowed' }, { status: 405 });
