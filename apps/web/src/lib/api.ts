@@ -22,6 +22,26 @@ export interface Card {
   priority: number;
   costUsd: number;
   overBudget: boolean;
+  attemptCount: number;
+}
+
+export interface Attempt {
+  runId: string;
+  agentId: string;
+  stageKey: string;
+  status: string;
+  outcome: string | null;
+  costUsd: number;
+  model: string | null;
+}
+
+export interface Notification {
+  seq: number;
+  kind: string;
+  cardId: string;
+  body: string;
+  read: boolean;
+  createdAt: string;
 }
 
 export interface BoardUsage {
@@ -110,6 +130,24 @@ export function moveCard(boardId: string, cardId: string, toStageKey: string): P
     headers,
     body: JSON.stringify({ toStageKey }),
   });
+}
+
+/** The attempts (runs) for a card, for the comparison view (docs/07 §5). */
+export async function getAttempts(boardId: string, cardId: string): Promise<Attempt[]> {
+  const res = await fetch(`/v1/boards/${boardId}/cards/${cardId}/attempts`, { headers });
+  if (!res.ok) throw new Error(`getAttempts failed (${res.status})`);
+  return ((await res.json()) as { attempts: Attempt[] }).attempts;
+}
+
+/** In-app notification feed (docs/07 §7). */
+export async function getNotifications(boardId: string): Promise<Notification[]> {
+  const res = await fetch(`/v1/boards/${boardId}/notifications`, { headers });
+  if (!res.ok) throw new Error(`getNotifications failed (${res.status})`);
+  return ((await res.json()) as { notifications: Notification[] }).notifications;
+}
+
+export function markNotificationRead(boardId: string, seq: number): Promise<Response> {
+  return fetch(`/v1/boards/${boardId}/notifications/${seq}/read`, { method: 'POST', headers });
 }
 
 /** Resolve an approval gate. The dev resolver is `usr_dev`; real auth supplies the user. */

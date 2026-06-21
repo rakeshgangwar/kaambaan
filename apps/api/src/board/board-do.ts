@@ -5,6 +5,7 @@ import { newId } from '../ids';
 import { verifyGithubSignature } from '../references/github-signature';
 import { mapGithubEvent } from '../references/github-events';
 import { estimateCostUsd } from '../metering/pricing';
+import { parseWindowMs } from '../metering/window';
 
 /** JSON-serializable value — used for everything that crosses the Durable Object RPC boundary. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -54,6 +55,40 @@ export interface CardView {
   /** Summed agent usage on this card (docs/07 §6); `overBudget` if it exceeds the per-card cap. */
   costUsd: number;
   overBudget: boolean;
+  /** Number of runs (attempts) against this card (docs/07 §5). */
+  attemptCount: number;
+}
+
+/** An in-app notification for a notify-worthy status transition (docs/07 §7). */
+export interface NotificationView {
+  seq: number;
+  kind: string;
+  cardId: string;
+  userId: string | null;
+  body: string;
+  read: boolean;
+  createdAt: string;
+}
+
+/** A pre-run cost estimate for a card's current stage, from historical runs (docs/07 §6). */
+export interface EstimateView {
+  stageKey: string;
+  estimatedUsd: number | null;
+  sampleSize: number;
+}
+
+/** One run of a card, surfaced for the attempts comparison view (docs/07 §5). */
+export interface AttemptView {
+  runId: string;
+  cardId: string;
+  stageKey: string;
+  agentId: string;
+  status: string;
+  outcome: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  costUsd: number;
+  model: string | null;
 }
 
 /** Per-activity token/cost usage reported by an agent (docs/05 §1). */
@@ -216,7 +251,11 @@ export interface BoardStub {
   submitForReview(input: { runId: string; leaseEpoch: number; output?: JsonValue }): Promise<Result<CardView>>;
   addReference(input: ReferenceInput): Promise<Result<ReferenceView>>;
   setBudget(input: { boardUsdCap?: number | null; cardUsdCap?: number | null }): Promise<Result<{ ok: true }>>;
-  getUsage(): Promise<UsageSummary>;
+  getUsage(opts?: { window?: string }): Promise<UsageSummary>;
+  getAttempts(cardId: string): Promise<AttemptView[]>;
+  estimateCardCost(cardId: string): Promise<Result<EstimateView>>;
+  getNotifications(opts?: { unreadOnly?: boolean }): Promise<NotificationView[]>;
+  markNotificationRead(seq: number): Promise<Result<{ ok: true }>>;
   setGithubSecret(secret: string): Promise<Result<{ configured: true }>>;
   handleGithubWebhook(input: {
     rawBody: string;
@@ -337,6 +376,18 @@ export class BoardDO extends DurableObject<Env> {
       )`,
     );
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_usage_card ON usage_records(card_id)`);
+    // In-app notifications (docs/07 §7): the notify-worthy status transitions, for the card owner.
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS notifications (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        user_id TEXT,
+        body TEXT NOT NULL,
+        read INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      )`,
+    );
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS gates (
         id TEXT PRIMARY KEY,
@@ -641,9 +692,84 @@ export class BoardDO extends DurableObject<Env> {
     return { ok: true, value: { ok: true } };
   }
 
-  /** Cost/usage rollup across this board's runs (docs/07 §6). */
-  async getUsage(): Promise<UsageSummary> {
-    return this.computeUsage();
+  /** Cost/usage rollup across this board's runs (docs/07 §6); `window` ("5h"/"7d") limits to recent spend. */
+  async getUsage(opts?: { window?: string }): Promise<UsageSummary> {
+    if (!opts?.window) return this.computeUsage();
+    const ms = parseWindowMs(opts.window);
+    const since = ms === null ? undefined : new Date(this.nowMs() - ms).toISOString();
+    return this.computeUsage(since);
+  }
+
+  /** In-app notifications for this board, newest first (docs/07 §7). */
+  async getNotifications(opts?: { unreadOnly?: boolean }): Promise<NotificationView[]> {
+    const where = opts?.unreadOnly ? `WHERE read = 0` : '';
+    return this.sql
+      .exec(`SELECT * FROM notifications ${where} ORDER BY seq DESC LIMIT 200`)
+      .toArray()
+      .map((r) => ({
+        seq: Number(r.seq),
+        kind: r.kind as string,
+        cardId: r.card_id as string,
+        userId: (r.user_id as string | null) ?? null,
+        body: r.body as string,
+        read: Number(r.read) === 1,
+        createdAt: r.created_at as string,
+      }));
+  }
+
+  /** Mark a notification read (docs/07 §7). */
+  async markNotificationRead(seq: number): Promise<Result<{ ok: true }>> {
+    this.sql.exec(`UPDATE notifications SET read = 1 WHERE seq = ?`, seq);
+    return { ok: true, value: { ok: true } };
+  }
+
+  /**
+   * Pre-run cost estimate for a card's current stage (docs/07 §6): the average spend per **ended**
+   * billed run at that stage. `status = 'ended'` excludes the card's own in-flight run (no
+   * self-skew); the INNER join means `sampleSize` counts ended runs that actually reported usage.
+   */
+  async estimateCardCost(cardId: string): Promise<Result<EstimateView>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    const card = this.getCard(cardId);
+    if (!card) return { ok: false, code: 'CARD_NOT_FOUND', message: `card not found: ${cardId}` };
+    const stageKey = card.currentStageKey;
+    const row = this.sql
+      .exec(
+        `SELECT COUNT(DISTINCT u.run_id) AS runs, COALESCE(SUM(u.cost_usd), 0) AS cost
+         FROM usage_records u JOIN runs r ON u.run_id = r.id WHERE r.stage_key = ? AND r.status = 'ended'`,
+        stageKey,
+      )
+      .one();
+    const runs = Number(row.runs);
+    return { ok: true, value: { stageKey, estimatedUsd: runs > 0 ? Number(row.cost) / runs : null, sampleSize: runs } };
+  }
+
+  /** The attempts (runs) for a card, newest-stage-first, with each run's cost and model (docs/07 §5). */
+  async getAttempts(cardId: string): Promise<AttemptView[]> {
+    return this.sql
+      .exec(`SELECT * FROM runs WHERE card_id = ? ORDER BY started_at ASC`, cardId)
+      .toArray()
+      .map((r) => {
+        const runId = r.id as string;
+        const cost = Number(this.sql.exec(`SELECT COALESCE(SUM(cost_usd), 0) AS c FROM usage_records WHERE run_id = ?`, runId).one().c);
+        const modelRow = this.sql
+          .exec(`SELECT model FROM usage_records WHERE run_id = ? AND model IS NOT NULL ORDER BY seq DESC LIMIT 1`, runId)
+          .toArray()[0];
+        return {
+          runId,
+          cardId: r.card_id as string,
+          stageKey: r.stage_key as string,
+          agentId: r.agent_id as string,
+          status: r.status as string,
+          outcome: (r.outcome as string | null) ?? null,
+          startedAt: r.started_at as string,
+          endedAt: (r.ended_at as string | null) ?? null,
+          costUsd: cost,
+          model: modelRow ? (modelRow.model as string) : null,
+        };
+      });
   }
 
   // ----- RPC: agent contract (docs/04) -----
@@ -899,6 +1025,7 @@ export class BoardDO extends DurableObject<Env> {
     const cardId = run.card_id as string;
     this.sql.exec(`UPDATE runs SET status = 'ended', outcome = 'crashed', ended_at = ? WHERE id = ?`, this.now(), input.runId);
     this.endAttempt(cardId, 'card.failed', input.reason);
+    this.notify('failed', cardId, input.reason || 'Run failed');
     return { ok: true, value: this.mustGetCard(cardId) };
   }
 
@@ -935,6 +1062,7 @@ export class BoardDO extends DurableObject<Env> {
     for (const r of rows) {
       this.sql.exec(`UPDATE runs SET status = 'ended', outcome = 'reclaimed', ended_at = ? WHERE id = ?`, now, r.id);
       this.endAttempt(r.card_id as string, 'run.reclaimed', null, String(r.id));
+      this.notify('reclaimed', r.card_id as string, 'Agent went dark — run reclaimed');
     }
     return rows.length;
   }
@@ -1035,6 +1163,7 @@ export class BoardDO extends DurableObject<Env> {
       now,
     );
     this.emit('gate.opened', { gateId: id, cardId, stageKey });
+    this.notify('gate', cardId, `Review needed at ${stageKey}`);
     return id;
   }
 
@@ -1094,6 +1223,21 @@ export class BoardDO extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Number(min) + HEARTBEAT_TIMEOUT_MS);
   }
 
+  /** Record an in-app notification for the card's owner and broadcast it (docs/07 §7). */
+  private notify(kind: string, cardId: string, body: string): void {
+    const card = this.getCardRow(cardId);
+    const userId = card ? (card.owner_user_id as string) : null;
+    this.sql.exec(
+      `INSERT INTO notifications (kind, card_id, user_id, body, read, created_at) VALUES (?, ?, ?, ?, 0, ?)`,
+      kind,
+      cardId,
+      userId,
+      body,
+      this.now(),
+    );
+    this.emit('notification', { kind, cardId, userId });
+  }
+
   private emit(type: string, payload: Record<string, unknown>): void {
     const ts = this.now();
     this.sql.exec(`INSERT INTO events (type, payload_json, ts) VALUES (?, ?, ?)`, type, JSON.stringify(payload), ts);
@@ -1142,16 +1286,27 @@ export class BoardDO extends DurableObject<Env> {
   }
 
   private allCards(): CardView[] {
+    // Precompute per-card cost + attempt count in two grouped queries instead of N point queries —
+    // allCards() feeds every snapshot, which is the live-feed hot path.
+    const costByCard = new Map<string, number>();
+    for (const r of this.sql.exec(`SELECT card_id, COALESCE(SUM(cost_usd), 0) AS c FROM usage_records GROUP BY card_id`).toArray()) {
+      costByCard.set(r.card_id as string, Number(r.c));
+    }
+    const attemptsByCard = new Map<string, number>();
+    for (const r of this.sql.exec(`SELECT card_id, COUNT(*) AS n FROM runs GROUP BY card_id`).toArray()) {
+      attemptsByCard.set(r.card_id as string, Number(r.n));
+    }
     return this.sql
       .exec(`SELECT * FROM cards ORDER BY priority DESC, created_at ASC`)
       .toArray()
-      .map((r) => this.rowToCard(r));
+      .map((r) => this.rowToCard(r, { costUsd: costByCard.get(r.id as string) ?? 0, attemptCount: attemptsByCard.get(r.id as string) ?? 0 }));
   }
 
-  private rowToCard(row: Row): CardView {
+  private rowToCard(row: Row, pre?: { costUsd: number; attemptCount: number }): CardView {
     const id = row.id as string;
-    const costUsd = this.cardCost(id);
+    const costUsd = pre?.costUsd ?? this.cardCost(id);
     const cardCap = this.budgetCap('budgetCardUsdCap');
+    const attemptCount = pre?.attemptCount ?? Number(this.sql.exec(`SELECT COUNT(*) AS n FROM runs WHERE card_id = ?`, id).one().n);
     return {
       id,
       title: row.title as string,
@@ -1168,6 +1323,7 @@ export class BoardDO extends DurableObject<Env> {
       // `>=` matches the enforcement gate (postActivity rejects once at/over the cap), so the red
       // chip appears exactly when billing stops.
       overBudget: cardCap !== null && costUsd >= cardCap,
+      attemptCount,
     };
   }
 
@@ -1223,32 +1379,37 @@ export class BoardDO extends DurableObject<Env> {
     return cap !== null && this.boardCost() >= cap;
   }
 
-  private computeUsage(): UsageSummary {
+  private computeUsage(sinceIso?: string): UsageSummary {
+    // Optional rolling-window filter (docs/07 §6), parameterized. ts is an ISO string, so >= is chronological.
+    const w = sinceIso ? ` WHERE ts >= ?` : '';
+    const p = sinceIso ? [sinceIso] : [];
     const totals = this.sql
       .exec(
         `SELECT COALESCE(SUM(cost_usd), 0) AS cost,
                 COALESCE(SUM(CASE WHEN estimated = 1 THEN cost_usd ELSE 0 END), 0) AS est,
                 COALESCE(SUM(input_tokens), 0) AS itok,
                 COALESCE(SUM(output_tokens), 0) AS otok
-         FROM usage_records`,
+         FROM usage_records${w}`,
+        ...p,
       )
       .one();
     const unpriced = this.sql
-      .exec(`SELECT COUNT(*) AS n FROM usage_records WHERE estimated = 1 AND cost_usd = 0`)
+      .exec(`SELECT COUNT(*) AS n FROM usage_records WHERE estimated = 1 AND cost_usd = 0${sinceIso ? ' AND ts >= ?' : ''}`, ...p)
       .one();
     const byModel = this.sql
       .exec(
         `SELECT COALESCE(model, '(unknown)') AS model, SUM(cost_usd) AS cost, SUM(input_tokens) AS itok, SUM(output_tokens) AS otok
-         FROM usage_records GROUP BY model ORDER BY cost DESC`,
+         FROM usage_records${w} GROUP BY model ORDER BY cost DESC`,
+        ...p,
       )
       .toArray()
       .map((r) => ({ model: r.model as string, costUsd: Number(r.cost), inputTokens: Number(r.itok), outputTokens: Number(r.otok) }));
     const byAgent = this.sql
-      .exec(`SELECT agent_id, SUM(cost_usd) AS cost FROM usage_records GROUP BY agent_id ORDER BY cost DESC`)
+      .exec(`SELECT agent_id, SUM(cost_usd) AS cost FROM usage_records${w} GROUP BY agent_id ORDER BY cost DESC`, ...p)
       .toArray()
       .map((r) => ({ agentId: r.agent_id as string, costUsd: Number(r.cost) }));
     const byCard = this.sql
-      .exec(`SELECT card_id, SUM(cost_usd) AS cost FROM usage_records GROUP BY card_id ORDER BY cost DESC`)
+      .exec(`SELECT card_id, SUM(cost_usd) AS cost FROM usage_records${w} GROUP BY card_id ORDER BY cost DESC`, ...p)
       .toArray()
       .map((r) => ({ cardId: r.card_id as string, costUsd: Number(r.cost) }));
     return {

@@ -7,9 +7,14 @@
     moveCard,
     resolveGate,
     openBoardSocket,
+    getAttempts,
+    getNotifications,
+    markNotificationRead,
     DEFAULT_STAGES,
     type BoardSnapshot,
     type GateDecision,
+    type Attempt,
+    type Notification,
   } from '$lib/api';
   import { Button } from '$lib/components/ui/button';
   import { cardDraggable, columnDropTarget } from '$lib/dnd';
@@ -22,15 +27,38 @@
   let connected = $state(false);
   let overStage = $state<string | null>(null);
 
+  let notifications = $state<Notification[]>([]);
+  let showNotifications = $state(false);
+  let attemptsByCard = $state<Record<string, Attempt[]>>({});
+  let openAttempts = $state<string | null>(null);
+
   let boardId: string | null = null;
 
   async function refresh(): Promise<void> {
     if (!boardId) return;
     try {
       board = await getBoard(boardId);
+      notifications = await getNotifications(boardId);
     } catch (e) {
       error = String(e);
     }
+  }
+
+  const unreadCount = $derived(notifications.filter((n) => !n.read).length);
+
+  async function onMarkRead(seq: number): Promise<void> {
+    if (!boardId) return;
+    await markNotificationRead(boardId, seq);
+    await refresh();
+  }
+
+  async function toggleAttempts(cardId: string): Promise<void> {
+    if (openAttempts === cardId) {
+      openAttempts = null;
+      return;
+    }
+    if (boardId) attemptsByCard[cardId] = await getAttempts(boardId, cardId);
+    openAttempts = cardId;
   }
 
   onMount(() => {
@@ -154,6 +182,31 @@
         Kaambaan <span class="text-muted-foreground font-normal">/ {board.name}</span>
       </h1>
       <div class="flex items-center gap-2">
+        <div class="relative">
+          <button
+            onclick={() => (showNotifications = !showNotifications)}
+            class="rounded-full border px-2 py-0.5 text-xs {unreadCount > 0 ? 'border-amber-500/50 text-amber-400' : 'text-muted-foreground'}"
+          >
+            🔔 {unreadCount}
+          </button>
+          {#if showNotifications}
+            <div class="bg-card absolute right-0 z-10 mt-1 w-72 rounded-md border p-1 text-xs shadow-lg">
+              {#if notifications.length === 0}
+                <p class="text-muted-foreground p-2">No notifications</p>
+              {:else}
+                {#each notifications.slice(0, 20) as n (n.seq)}
+                  <button
+                    onclick={() => onMarkRead(n.seq)}
+                    class="hover:bg-muted flex w-full items-start gap-2 rounded p-1.5 text-left"
+                  >
+                    <span class={n.read ? 'text-muted-foreground' : 'text-amber-400'}>{n.read ? '○' : '●'}</span>
+                    <span><span class="font-medium">{n.kind}</span> · {n.body}</span>
+                  </button>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        </div>
         <span
           title="Total agent cost{board.usage.budgetUsd !== null ? ` of a ${fmtUsd(board.usage.budgetUsd)} budget` : ''}"
           class="rounded-full border px-2 py-0.5 text-xs {board.usage.overBudget
@@ -254,6 +307,24 @@
                       {/if}
                     {/each}
                   </div>
+                {/if}
+                {#if card.attemptCount > 1}
+                  <button
+                    onclick={() => toggleAttempts(card.id)}
+                    class="text-muted-foreground hover:text-foreground mt-1.5 text-xs underline-offset-2 hover:underline"
+                  >
+                    ⟳ {card.attemptCount} attempts
+                  </button>
+                  {#if openAttempts === card.id && attemptsByCard[card.id]}
+                    <div class="mt-1 space-y-1 border-l pl-2 text-xs">
+                      {#each attemptsByCard[card.id] as a, i (a.runId)}
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="text-muted-foreground">#{i + 1} {a.agentId}{a.model ? ` · ${a.model}` : ''}</span>
+                          <span>{fmtUsd(a.costUsd)}{a.outcome ? ` · ${a.outcome}` : ''}</span>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
                 {/if}
                 {#if gateFor(card.id)}
                   {@const gate = gateFor(card.id)!}

@@ -135,4 +135,59 @@ describe('BoardDO — metering & budgets (docs/07 §6)', () => {
       expect((await board.claim({ agentId: 'agt_b', capabilities: ['build'] })).claimed).toBe(true);
     });
   });
+
+  it('supports a rolling-window filter on usage', async () => {
+    await runInDurableObject(stubFor('m-window'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_win', tenantId: 'tnt_a', name: 'W', stages: PIPELINE });
+      const { runId, leaseEpoch } = await claimCard(board);
+      await board.postActivity({ runId, leaseEpoch, type: 'action', usage: { costUsd: 1 } });
+      expect((await board.getUsage({ window: '5h' })).totalCostUsd).toBeCloseTo(1, 6); // recent included
+      expect((await board.getUsage({ window: 'bogus' })).totalCostUsd).toBeCloseTo(1, 6); // bad window → full rollup
+    });
+  });
+
+  it('estimates a stage cost from historical runs', async () => {
+    await runInDurableObject(stubFor('m-estimate-stage'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_es', tenantId: 'tnt_a', name: 'ES', stages: PIPELINE });
+      // Two historical runs at 'build': $1 and $3 → average $2.
+      for (const cost of [1, 3]) {
+        const c = await board.createCard({ title: 'h', ownerUserId: 'usr_a' });
+        if (!c.ok) throw new Error('card');
+        const run = await board.claim({ agentId: 'agt_b', capabilities: ['build'] });
+        if (!run.claimed) throw new Error('claim');
+        await board.postActivity({ runId: run.runId, leaseEpoch: run.leaseEpoch, type: 'action', usage: { costUsd: cost } });
+        await board.complete({ runId: run.runId, leaseEpoch: run.leaseEpoch });
+      }
+      const fresh = await board.createCard({ title: 'new', ownerUserId: 'usr_a' });
+      if (!fresh.ok) throw new Error('card');
+      const est = await board.estimateCardCost(fresh.value.id);
+      expect(est.ok).toBe(true);
+      if (est.ok) {
+        expect(est.value.estimatedUsd).toBeCloseTo(2, 6);
+        expect(est.value.sampleSize).toBe(2);
+      }
+    });
+  });
+
+  it("excludes a card's own in-flight run from its estimate (no self-skew)", async () => {
+    await runInDurableObject(stubFor('m-estimate-self'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_eslf', tenantId: 'tnt_a', name: 'ESLF', stages: PIPELINE });
+      const { cardId, runId, leaseEpoch } = await claimCard(board);
+      await board.postActivity({ runId, leaseEpoch, type: 'action', usage: { costUsd: 5 } }); // in-flight, not completed
+      const est = await board.estimateCardCost(cardId);
+      expect(est.ok && est.value.estimatedUsd).toBeNull(); // its own running spend is not counted
+      expect(est.ok && est.value.sampleSize).toBe(0);
+    });
+  });
+
+  it('returns no estimate when a stage has no history', async () => {
+    await runInDurableObject(stubFor('m-estimate-none'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_en', tenantId: 'tnt_a', name: 'EN', stages: PIPELINE });
+      const c = await board.createCard({ title: 'first', ownerUserId: 'usr_a' });
+      if (!c.ok) throw new Error('card');
+      const est = await board.estimateCardCost(c.value.id);
+      expect(est.ok && est.value.estimatedUsd).toBeNull();
+      expect(est.ok && est.value.sampleSize).toBe(0);
+    });
+  });
 });
