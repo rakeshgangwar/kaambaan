@@ -139,6 +139,29 @@ an agent to call `claim`. Modeled on A2A **PushNotificationConfig**:
   exponential backoff; each delivery is **HMAC/JWT-signed**; the receiver verifies and may then
   `claim`. SSRF defense: webhook URLs are allowlisted/ownership-verified.
 
+### Implementation (P7)
+
+The Board DO owns the subscriptions and the delivery queue. `registerPushConfig({agentId, url, token,
+capabilities, events})` stores a config (http(s)-only — the SSRF guard; `POST …/push-configs`). When a
+card becomes **claimable** (created at / advanced into / released or reclaimed back to a
+capability-owned stage), `notifyWorkAvailable` queues a `work.available` delivery into `push_deliveries`
+for every subscribed config whose `capabilities` match the stage's owner — so an agent is only pinged
+about work it could actually claim. `dispatchPushDeliveries(sender)` drains pending rows, **signs each
+body** (`X-Kaambaan-Signature: sha256=…`, HMAC over the exact bytes — shared with the inbound GitHub
+verifier, `src/crypto/hmac.ts`) and POSTs it (`src/push/deliver.ts`), marking each sent/failed.
+`POST …/push/dispatch` triggers a drain; `GET …/push/deliveries` inspects the queue. URLs are checked
+against an **SSRF denylist** (`src/push/ssrf.ts` — only public http(s); blocks localhost, loopback,
+RFC1918, link-local/169.254 metadata, IPv6 ULA/link-local).
+
+- **⚠️ Best-effort today**: this slice is **at-most-once** — a `failed` delivery is terminal (not
+  retried). Push is only an accelerator over the always-available pull path, so a dropped ping just
+  means the agent learns of work on its next poll. **Durable transport** (Cloudflare **Queue** →
+  **Workflow** with exponential backoff + retry caps) is the upgrade to at-least-once.
+- **⚠️ Remaining**: events beyond `work.available` (`gate.resolved`, `run.reclaimed`,
+  `card.canceled`); **URL ownership-verification** (the literal-IP denylist doesn't stop DNS
+  rebinding — a host allowlist / challenge-response is the durable fix); auth on `push/dispatch` +
+  `push/deliveries` when real auth replaces the dev headers.
+
 ## 5. Harness adapters (the "any harness, anywhere" layer)
 
 Every harness exposes the same capabilities behind one **adapter interface** — the wire-level

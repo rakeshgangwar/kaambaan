@@ -6,6 +6,8 @@ import { verifyGithubSignature } from '../references/github-signature';
 import { mapGithubEvent } from '../references/github-events';
 import { estimateCostUsd } from '../metering/pricing';
 import { parseWindowMs } from '../metering/window';
+import { signAndSend, type PushSender } from '../push/deliver';
+import { isPublicHttpUrl } from '../push/ssrf';
 
 /** JSON-serializable value — used for everything that crosses the Durable Object RPC boundary. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -57,6 +59,24 @@ export interface CardView {
   overBudget: boolean;
   /** Number of runs (attempts) against this card (docs/07 §5). */
   attemptCount: number;
+}
+
+/** A registered push subscription (A2A PushNotificationConfig, docs/05 §4). */
+export interface PushConfigInput {
+  agentId: string;
+  url: string;
+  token: string;
+  capabilities?: string[];
+  events?: string[];
+}
+
+export interface PushDeliveryView {
+  id: number;
+  configId: string;
+  url: string;
+  body: string;
+  status: string;
+  attempts: number;
 }
 
 /** An in-app notification for a notify-worthy status transition (docs/07 §7). */
@@ -256,6 +276,9 @@ export interface BoardStub {
   estimateCardCost(cardId: string): Promise<Result<EstimateView>>;
   getNotifications(opts?: { unreadOnly?: boolean }): Promise<NotificationView[]>;
   markNotificationRead(seq: number): Promise<Result<{ ok: true }>>;
+  registerPushConfig(input: PushConfigInput): Promise<Result<{ configId: string }>>;
+  getPushDeliveries(opts?: { status?: string }): Promise<PushDeliveryView[]>;
+  dispatchPushDeliveries(): Promise<{ sent: number; failed: number }>;
   setGithubSecret(secret: string): Promise<Result<{ configured: true }>>;
   handleGithubWebhook(input: {
     rawBody: string;
@@ -297,6 +320,8 @@ type Row = Record<string, SqlStorageValue>;
  * Each claim takes a lease with a fencing epoch; a missed heartbeat is reclaimed via a DO alarm,
  * and repeated failures trip a circuit breaker.
  */
+const defaultPushSender: PushSender = (url, init) => fetch(url, init).then((r) => ({ status: r.status }));
+
 export class BoardDO extends DurableObject<Env> {
   private sql: SqlStorage;
 
@@ -376,6 +401,31 @@ export class BoardDO extends DurableObject<Env> {
       )`,
     );
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_usage_card ON usage_records(card_id)`);
+    // Outbound push (docs/05 §4): per-agent PushNotificationConfig + a durable delivery queue.
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS push_configs (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        token TEXT NOT NULL,
+        capabilities_json TEXT NOT NULL DEFAULT '[]',
+        events_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        UNIQUE(agent_id, url)
+      )`,
+    );
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS push_deliveries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        config_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        body TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_status INTEGER,
+        created_at TEXT NOT NULL
+      )`,
+    );
     // In-app notifications (docs/07 §7): the notify-worthy status transitions, for the card owner.
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS notifications (
@@ -478,6 +528,7 @@ export class BoardDO extends DurableObject<Env> {
     );
     const card = this.mustGetCard(id);
     this.emit('card.created', { card });
+    this.notifyWorkAvailable(id);
     return { ok: true, value: card };
   }
 
@@ -721,6 +772,118 @@ export class BoardDO extends DurableObject<Env> {
   async markNotificationRead(seq: number): Promise<Result<{ ok: true }>> {
     this.sql.exec(`UPDATE notifications SET read = 1 WHERE seq = ?`, seq);
     return { ok: true, value: { ok: true } };
+  }
+
+  /** Register/replace an agent's push subscription (docs/05 §4). Only http(s) urls (SSRF guard). */
+  async registerPushConfig(input: PushConfigInput): Promise<Result<{ configId: string }>> {
+    if (!this.getMeta('boardId')) {
+      return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
+    }
+    if (!isPublicHttpUrl(input.url)) {
+      return { ok: false, code: 'INVALID_URL', message: `push url must be a public http(s) endpoint: ${input.url}` };
+    }
+    const existing = this.sql.exec(`SELECT id FROM push_configs WHERE agent_id = ? AND url = ?`, input.agentId, input.url).toArray()[0];
+    const id = existing ? (existing.id as string) : newId('push');
+    const caps = JSON.stringify(input.capabilities ?? []);
+    const events = JSON.stringify(input.events ?? ['work.available']);
+    if (existing) {
+      this.sql.exec(`UPDATE push_configs SET token = ?, capabilities_json = ?, events_json = ? WHERE id = ?`, input.token, caps, events, id);
+    } else {
+      this.sql.exec(
+        `INSERT INTO push_configs (id, agent_id, url, token, capabilities_json, events_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        input.agentId,
+        input.url,
+        input.token,
+        caps,
+        events,
+        this.now(),
+      );
+    }
+    return { ok: true, value: { configId: id } };
+  }
+
+  /** Inspect the push delivery queue (docs/05 §4). */
+  async getPushDeliveries(opts?: { status?: string }): Promise<PushDeliveryView[]> {
+    const where = opts?.status ? ` WHERE status = ?` : '';
+    const p = opts?.status ? [opts.status] : [];
+    return this.sql
+      .exec(`SELECT * FROM push_deliveries${where} ORDER BY id DESC LIMIT 200`, ...p)
+      .toArray()
+      .reverse()
+      .map((r) => ({
+        id: Number(r.id),
+        configId: r.config_id as string,
+        url: r.url as string,
+        body: r.body as string,
+        status: r.status as string,
+        attempts: Number(r.attempts),
+      }));
+  }
+
+  /**
+   * Drain pending push deliveries: sign each with its config token and send (docs/05 §4). The sender
+   * is injectable (tests pass a stub); production durability — Queue + Workflow with exponential
+   * backoff — wraps this. A single drain marks each delivery sent/failed.
+   */
+  async dispatchPushDeliveries(sender: PushSender = defaultPushSender): Promise<{ sent: number; failed: number }> {
+    const rows = this.sql
+      .exec(
+        `SELECT d.id, d.url, d.body, c.token FROM push_deliveries d JOIN push_configs c ON d.config_id = c.id WHERE d.status = 'pending' ORDER BY d.id ASC LIMIT 50`,
+      )
+      .toArray();
+    let sent = 0;
+    let failed = 0;
+    for (const r of rows) {
+      const outcome = await signAndSend({ id: Number(r.id), url: r.url as string, body: r.body as string, token: r.token as string }, sender);
+      this.sql.exec(
+        `UPDATE push_deliveries SET status = ?, attempts = attempts + 1, last_status = ? WHERE id = ?`,
+        outcome.ok ? 'sent' : 'failed',
+        outcome.status,
+        r.id,
+      );
+      if (outcome.ok) sent++;
+      else failed++;
+    }
+    // Bound the queue: keep only the most recent delivered rows (the pending/failed ones stay).
+    this.sql.exec(
+      `DELETE FROM push_deliveries WHERE status = 'sent' AND id NOT IN (SELECT id FROM push_deliveries WHERE status = 'sent' ORDER BY id DESC LIMIT 100)`,
+    );
+    return { sent, failed };
+  }
+
+  /**
+   * Queue `work.available` deliveries for a claimable card, only to configs that could actually claim
+   * it (docs/05 §4): a capability stage targets configs advertising that capability; an agent-owned
+   * stage targets only that agent. No pings while the board is over budget (claim would refuse).
+   */
+  private notifyWorkAvailable(cardId: string): void {
+    const card = this.getCard(cardId);
+    if (!card || card.state !== 'submitted') return;
+    if (this.boardOverBudget()) return;
+    const stage = this.stages().find((s) => s.key === card.currentStageKey);
+    if (!stage || !this.isAgentClaimable(stage)) return;
+    const ownerCapability = stage.ownerKind === 'capability' ? stage.owner : undefined;
+    const ownerAgent = stage.ownerKind === 'agent' ? stage.owner : undefined;
+    const boardId = this.getMeta('boardId');
+    const ts = this.now();
+    for (const cfg of this.sql.exec(`SELECT * FROM push_configs`).toArray()) {
+      const events = JSON.parse(cfg.events_json as string) as string[];
+      if (!events.includes('work.available')) continue;
+      if (ownerAgent && (cfg.agent_id as string) !== ownerAgent) continue;
+      if (ownerCapability) {
+        const caps = JSON.parse(cfg.capabilities_json as string) as string[];
+        if (!caps.includes(ownerCapability)) continue;
+      }
+      const body = JSON.stringify({ event: 'work.available', boardId, cardId, stageKey: stage.key, ts });
+      this.sql.exec(
+        `INSERT INTO push_deliveries (config_id, url, body, status, attempts, created_at) VALUES (?, ?, ?, 'pending', 0, ?)`,
+        cfg.id,
+        cfg.url,
+        body,
+        ts,
+      );
+    }
   }
 
   /**
@@ -989,6 +1152,7 @@ export class BoardDO extends DurableObject<Env> {
         cardId,
       );
       this.emit('card.changes_requested', { cardId, gateId: input.gateId, to: gate.return_stage_key });
+      this.notifyWorkAvailable(cardId); // back on a claimable stage for rework
     } else {
       this.sql.exec(
         `UPDATE cards SET state = 'rejected', delegate_agent_id = NULL, current_run_id = NULL, updated_at = ? WHERE id = ?`,
@@ -1042,6 +1206,7 @@ export class BoardDO extends DurableObject<Env> {
       cardId,
     );
     this.emit('run.released', { cardId, runId: input.runId });
+    this.notifyWorkAvailable(cardId);
     await this.scheduleReclaim();
     return { ok: true, value: this.mustGetCard(cardId) };
   }
@@ -1061,7 +1226,7 @@ export class BoardDO extends DurableObject<Env> {
     const now = this.now();
     for (const r of rows) {
       this.sql.exec(`UPDATE runs SET status = 'ended', outcome = 'reclaimed', ended_at = ? WHERE id = ?`, now, r.id);
-      this.endAttempt(r.card_id as string, 'run.reclaimed', null, String(r.id));
+      this.endAttempt(r.card_id as string, 'run.reclaimed', null, String(r.id)); // endAttempt re-queues + notifies work.available
       this.notify('reclaimed', r.card_id as string, 'Agent went dark — run reclaimed');
     }
     return rows.length;
@@ -1116,6 +1281,8 @@ export class BoardDO extends DurableObject<Env> {
       cardId,
     );
     this.emit(event, { cardId, runId: runId ?? null, reason, failures, brokeCircuit: state === 'input-required' });
+    // Central re-queue point (fail + reclaim): a card returned to the queue is claimable again.
+    this.notifyWorkAvailable(cardId);
   }
 
   /** Advance a card to the next stage — opening an approval gate on entry to a human review stage. */
@@ -1146,6 +1313,7 @@ export class BoardDO extends DurableObject<Env> {
     );
     this.emit('card.advanced', { cardId, from: fromStageKey, to: next.key });
     if (gated) this.createGate(cardId, next.key, fromStageKey, producedBy);
+    else this.notifyWorkAvailable(cardId);
   }
 
   private createGate(cardId: string, stageKey: string, returnStageKey: string, producedBy: string): string {

@@ -183,6 +183,26 @@ export default {
         return Response.json(r.ok ? r.value : { error: r });
       }
 
+      // POST /v1/boards/:id/push-configs — register an agent push subscription (docs/05 §4)
+      if (rest === 'push-configs' && request.method === 'POST') {
+        const agentId = request.headers.get('X-Agent-Id');
+        if (!agentId || agentId.trim() === '') return Response.json({ error: 'X-Agent-Id required' }, { status: 400 });
+        const body = (await request.json()) as { url: string; token: string; capabilities?: string[]; events?: string[] };
+        const result = await stub.registerPushConfig({ agentId, ...body });
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json(result.value, { status: 201 });
+      }
+
+      // POST /v1/boards/:id/push/dispatch — drain the delivery queue (cron/admin) (docs/05 §4)
+      if (rest === 'push/dispatch' && request.method === 'POST') {
+        return Response.json(await stub.dispatchPushDeliveries());
+      }
+
+      // GET /v1/boards/:id/push/deliveries — inspect the delivery queue (docs/05 §4)
+      if (rest === 'push/deliveries' && request.method === 'GET') {
+        return Response.json({ deliveries: await stub.getPushDeliveries() });
+      }
+
       // PUT /v1/boards/:id/budget — set/clear USD budget caps (docs/07 §6)
       if (rest === 'budget' && request.method === 'PUT') {
         const body = (await request.json()) as { boardUsdCap?: number | null; cardUsdCap?: number | null };
