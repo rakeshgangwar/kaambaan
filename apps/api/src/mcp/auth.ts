@@ -17,7 +17,11 @@ export function resolveBearer(request: Request): McpAuth | null {
   const header = request.headers.get('Authorization') ?? '';
   const match = header.match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
-  const [tenantId, agentId, capsRaw] = match[1]!.trim().split(':');
+  // Exactly "<tenant>:<agent>" or "<tenant>:<agent>:<caps>" — reject anything else so a malformed
+  // token fails loudly rather than silently dropping the capabilities segment.
+  const parts = match[1]!.trim().split(':');
+  if (parts.length < 2 || parts.length > 3) return null;
+  const [tenantId, agentId, capsRaw] = parts;
   if (!tenantId || !agentId) return null;
   const capabilities = capsRaw ? capsRaw.split(',').map((c) => c.trim()).filter(Boolean) : [];
   return { tenantId, agentId, capabilities };

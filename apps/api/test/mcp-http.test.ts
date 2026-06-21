@@ -37,6 +37,17 @@ describe('MCP server — OAuth Resource Server', () => {
     expect(wwwAuth).toContain('resource_metadata=');
   });
 
+  it('rejects malformed bearer tokens (loud failure, not silent scope-drop)', async () => {
+    for (const bad of ['garbage', 'tnt_only', ':agt:caps', 'tnt::caps', 'a:b:c:d']) {
+      const res = await SELF.fetch(`${base}/mcp`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${bad}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+      });
+      expect(res.status, `token "${bad}" should be rejected`).toBe(401);
+    }
+  });
+
   it('serves OAuth protected-resource metadata (RFC 9728)', async () => {
     const res = await SELF.fetch(`${base}/.well-known/oauth-protected-resource`);
     expect(res.status).toBe(200);

@@ -90,6 +90,9 @@ the two surfaces are one contract — proven by `apps/api/test/mcp-parity.test.t
   `X-Tenant-Id`/`X-Agent-Id` headers, and serves RFC 9728 protected-resource metadata + the `401`
   challenge. **⚠️ OPEN**: a real Authorization Server (PKCE / dynamic registration via
   `@cloudflare/workers-oauth-provider`) is a fast-follow; only the token resolver changes.
+- **⚠️ OPEN (P4 deferred)**: `Origin`/DNS-rebinding validation on the transport. Auth is a bearer
+  (no ambient browser session to hijack), so the risk is low; it is wired when the real AS lands
+  (`enableDnsRebindingProtection` + an allowlist derived from the deployed host).
 
 **Connect Claude Code** to a running board worker (`pnpm --filter @kaambaan/api dev`) — see
 [`apps/api/examples/claude-code.mcp.json`](../apps/api/examples/claude-code.mcp.json):

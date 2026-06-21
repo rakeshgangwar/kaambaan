@@ -101,3 +101,75 @@ describe('MCP tools — claim & lifecycle', () => {
     expect((res.content as Array<{ text: string }>)[0]!.text).toContain('STALE_LEASE');
   });
 });
+
+describe('MCP tools — run verbs', () => {
+  /** Claim the seeded card and return the active run handle. */
+  async function claimed(boardId: string) {
+    await initBoard(AUTH, boardId, RESEARCH_PIPELINE);
+    await depsFor(AUTH).boardStub(boardId).createCard({ title: 'Work', ownerUserId: 'usr_a' });
+    const client = await connectMcp(depsFor(AUTH));
+    const c = toolJson(await client.callTool({ name: 'kaambaan_claim_card', arguments: { boardId } })) as {
+      runId: string;
+      leaseEpoch: number;
+    };
+    return { client, ...c };
+  }
+
+  it('heartbeat acknowledges an active lease', async () => {
+    const { client, runId, leaseEpoch } = await claimed('brd_hb');
+    const res = await client.callTool({ name: 'kaambaan_heartbeat', arguments: { boardId: 'brd_hb', runId, leaseEpoch } });
+    expect(res.isError).toBeFalsy();
+    expect(toolJson(res)).toEqual({ acknowledged: true });
+  });
+
+  it('block removes the card from the queue until it is unblocked', async () => {
+    const { client, runId, leaseEpoch } = await claimed('brd_block');
+    const res = await client.callTool({
+      name: 'kaambaan_block',
+      arguments: { boardId: 'brd_block', runId, leaseEpoch, reason: 'waiting on API key' },
+    });
+    expect(res.isError).toBeFalsy();
+    const reclaim = await client.callTool({ name: 'kaambaan_claim_card', arguments: { boardId: 'brd_block' } });
+    expect(toolJson(reclaim)).toEqual({ claimed: false });
+  });
+
+  it('release returns the card to the queue for another attempt', async () => {
+    const { client, runId, leaseEpoch } = await claimed('brd_rel');
+    const res = await client.callTool({ name: 'kaambaan_release', arguments: { boardId: 'brd_rel', runId, leaseEpoch } });
+    expect(res.isError).toBeFalsy();
+    const reclaim = toolJson(await client.callTool({ name: 'kaambaan_claim_card', arguments: { boardId: 'brd_rel' } })) as {
+      claimed: boolean;
+    };
+    expect(reclaim.claimed).toBe(true);
+  });
+
+  it('submit_for_review opens an approval gate at a gated agent stage', async () => {
+    const BUILD_PIPELINE = [
+      { key: 'build', name: 'Build', order: 0, ownerKind: 'capability' as const, owner: 'research', gate: 'approval' as const },
+      { key: 'ship', name: 'Ship', order: 1, ownerKind: 'capability' as const, owner: 'ship' },
+    ];
+    await initBoard(AUTH, 'brd_submit', BUILD_PIPELINE);
+    await depsFor(AUTH).boardStub('brd_submit').createCard({ title: 'Build it', ownerUserId: 'usr_a' });
+    const client = await connectMcp(depsFor(AUTH));
+    const c = toolJson(await client.callTool({ name: 'kaambaan_claim_card', arguments: { boardId: 'brd_submit' } })) as {
+      runId: string;
+      leaseEpoch: number;
+    };
+    const res = await client.callTool({
+      name: 'kaambaan_submit_for_review',
+      arguments: { boardId: 'brd_submit', runId: c.runId, leaseEpoch: c.leaseEpoch, output: { artifact: 'build.zip' } },
+    });
+    expect(res.isError).toBeFalsy();
+    const card = toolJson(res) as { state: string };
+    expect(card.state).toBe('input-required');
+    expect((await depsFor(AUTH).boardStub('brd_submit').getState()).gates).toHaveLength(1);
+  });
+
+  it('get_card returns isError for an unknown card', async () => {
+    await initBoard(AUTH, 'brd_gc', RESEARCH_PIPELINE);
+    const client = await connectMcp(depsFor(AUTH));
+    const res = await client.callTool({ name: 'kaambaan_get_card', arguments: { boardId: 'brd_gc', cardId: 'card_nope' } });
+    expect(res.isError).toBe(true);
+    expect((res.content as Array<{ text: string }>)[0]!.text).toContain('CARD_NOT_FOUND');
+  });
+});

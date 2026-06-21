@@ -24,6 +24,21 @@ export async function handleMcpRequest(request: Request, env: Env, auth: McpAuth
     sessionIdGenerator: undefined, // stateless
     enableJsonResponse: true,
   });
-  await server.connect(transport);
-  return transport.handleRequest(request);
+
+  // This route sits outside the Worker's outer try/catch (it precedes board routing), so it owns its
+  // own error boundary: any throw becomes a JSON-RPC internal error, never an unhandled rejection.
+  try {
+    await server.connect(transport);
+    return await transport.handleRequest(request);
+  } catch (err) {
+    const message = (err as { message?: string })?.message ?? 'internal error';
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32603, message } }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } finally {
+    // JSON-response mode resolves handleRequest with a fully materialized body, so closing the
+    // single-use server/transport here cannot truncate the response.
+    await server.close().catch(() => {});
+  }
 }
