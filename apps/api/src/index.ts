@@ -13,6 +13,7 @@ import {
   type BoardStub,
   type BoardErrorCode,
   type AgentActivityType,
+  type GateDecision,
   type Result,
   type JsonValue,
 } from './board/board-do';
@@ -42,9 +43,13 @@ function statusForCode(code: BoardErrorCode): number {
       return 400;
     case 'CARD_NOT_FOUND':
     case 'NOT_INITIALIZED':
+    case 'GATE_NOT_FOUND':
       return 404;
     case 'STALE_LEASE':
+    case 'GATE_NOT_PENDING':
       return 409;
+    case 'SEPARATION_OF_DUTIES':
+      return 403;
   }
 }
 
@@ -140,6 +145,7 @@ export default {
           result?: JsonValue;
           signal?: string;
           handoff?: JsonValue;
+          output?: JsonValue;
           reason?: string;
         };
         const respond = (r: Result<unknown>, key: string): Response =>
@@ -173,9 +179,29 @@ export default {
             return respond(await stub.fail({ runId, leaseEpoch: p.leaseEpoch, reason: p.reason ?? '' }), 'card');
           case 'release':
             return respond(await stub.release({ runId, leaseEpoch: p.leaseEpoch }), 'card');
+          case 'submit':
+            return respond(await stub.submitForReview({ runId, leaseEpoch: p.leaseEpoch, output: p.output }), 'card');
           default:
             return Response.json({ error: `unknown run action: ${action}` }, { status: 404 });
         }
+      }
+
+      // POST /v1/boards/:id/gates/:gateId/resolve — a human resolves an approval gate (docs/08 §6)
+      const gateMatch = rest.match(/^gates\/([^/]+)\/resolve$/);
+      if (gateMatch && request.method === 'POST') {
+        const decidedBy = request.headers.get('X-User-Id');
+        if (!decidedBy || decidedBy.trim() === '') {
+          return Response.json({ error: 'X-User-Id required' }, { status: 400 });
+        }
+        const gp = (await request.json()) as { decision: GateDecision; comment?: string };
+        const result = await stub.resolveGate({
+          gateId: gateMatch[1]!,
+          decision: gp.decision,
+          decidedBy,
+          comment: gp.comment,
+        });
+        if (!result.ok) return Response.json({ error: result }, { status: statusForCode(result.code) });
+        return Response.json({ card: result.value });
       }
 
       return Response.json({ error: 'method not allowed' }, { status: 405 });
