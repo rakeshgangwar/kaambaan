@@ -11,6 +11,7 @@ export interface Stage {
   order: number;
   gate?: 'none' | 'approval';
   wipLimit?: number;
+  routing?: 'pipeline' | 'manager';
 }
 
 export interface Card {
@@ -33,6 +34,7 @@ export interface Attempt {
   outcome: string | null;
   costUsd: number;
   model: string | null;
+  profileKey: string | null;
 }
 
 export interface Notification {
