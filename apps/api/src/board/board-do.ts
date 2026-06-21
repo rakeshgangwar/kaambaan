@@ -723,7 +723,11 @@ export class BoardDO extends DurableObject<Env> {
     return { ok: true, value: { ok: true } };
   }
 
-  /** Pre-run cost estimate for a card's current stage, averaged over historical runs there (docs/07 §6). */
+  /**
+   * Pre-run cost estimate for a card's current stage (docs/07 §6): the average spend per **ended**
+   * billed run at that stage. `status = 'ended'` excludes the card's own in-flight run (no
+   * self-skew); the INNER join means `sampleSize` counts ended runs that actually reported usage.
+   */
   async estimateCardCost(cardId: string): Promise<Result<EstimateView>> {
     if (!this.getMeta('boardId')) {
       return { ok: false, code: 'NOT_INITIALIZED', message: 'board is not initialized' };
@@ -734,7 +738,7 @@ export class BoardDO extends DurableObject<Env> {
     const row = this.sql
       .exec(
         `SELECT COUNT(DISTINCT u.run_id) AS runs, COALESCE(SUM(u.cost_usd), 0) AS cost
-         FROM usage_records u JOIN runs r ON u.run_id = r.id WHERE r.stage_key = ?`,
+         FROM usage_records u JOIN runs r ON u.run_id = r.id WHERE r.stage_key = ? AND r.status = 'ended'`,
         stageKey,
       )
       .one();
@@ -1282,17 +1286,27 @@ export class BoardDO extends DurableObject<Env> {
   }
 
   private allCards(): CardView[] {
+    // Precompute per-card cost + attempt count in two grouped queries instead of N point queries —
+    // allCards() feeds every snapshot, which is the live-feed hot path.
+    const costByCard = new Map<string, number>();
+    for (const r of this.sql.exec(`SELECT card_id, COALESCE(SUM(cost_usd), 0) AS c FROM usage_records GROUP BY card_id`).toArray()) {
+      costByCard.set(r.card_id as string, Number(r.c));
+    }
+    const attemptsByCard = new Map<string, number>();
+    for (const r of this.sql.exec(`SELECT card_id, COUNT(*) AS n FROM runs GROUP BY card_id`).toArray()) {
+      attemptsByCard.set(r.card_id as string, Number(r.n));
+    }
     return this.sql
       .exec(`SELECT * FROM cards ORDER BY priority DESC, created_at ASC`)
       .toArray()
-      .map((r) => this.rowToCard(r));
+      .map((r) => this.rowToCard(r, { costUsd: costByCard.get(r.id as string) ?? 0, attemptCount: attemptsByCard.get(r.id as string) ?? 0 }));
   }
 
-  private rowToCard(row: Row): CardView {
+  private rowToCard(row: Row, pre?: { costUsd: number; attemptCount: number }): CardView {
     const id = row.id as string;
-    const costUsd = this.cardCost(id);
+    const costUsd = pre?.costUsd ?? this.cardCost(id);
     const cardCap = this.budgetCap('budgetCardUsdCap');
-    const attemptCount = Number(this.sql.exec(`SELECT COUNT(*) AS n FROM runs WHERE card_id = ?`, id).one().n);
+    const attemptCount = pre?.attemptCount ?? Number(this.sql.exec(`SELECT COUNT(*) AS n FROM runs WHERE card_id = ?`, id).one().n);
     return {
       id,
       title: row.title as string,
@@ -1366,9 +1380,9 @@ export class BoardDO extends DurableObject<Env> {
   }
 
   private computeUsage(sinceIso?: string): UsageSummary {
-    // Optional rolling-window filter (docs/07 §6). ts is an ISO string, so lexical >= is chronological.
-    const w = sinceIso ? ` WHERE ts >= '${sinceIso.replace(/'/g, '')}'` : '';
-    const andW = sinceIso ? ` AND ts >= '${sinceIso.replace(/'/g, '')}'` : '';
+    // Optional rolling-window filter (docs/07 §6), parameterized. ts is an ISO string, so >= is chronological.
+    const w = sinceIso ? ` WHERE ts >= ?` : '';
+    const p = sinceIso ? [sinceIso] : [];
     const totals = this.sql
       .exec(
         `SELECT COALESCE(SUM(cost_usd), 0) AS cost,
@@ -1376,24 +1390,26 @@ export class BoardDO extends DurableObject<Env> {
                 COALESCE(SUM(input_tokens), 0) AS itok,
                 COALESCE(SUM(output_tokens), 0) AS otok
          FROM usage_records${w}`,
+        ...p,
       )
       .one();
     const unpriced = this.sql
-      .exec(`SELECT COUNT(*) AS n FROM usage_records WHERE estimated = 1 AND cost_usd = 0${andW}`)
+      .exec(`SELECT COUNT(*) AS n FROM usage_records WHERE estimated = 1 AND cost_usd = 0${sinceIso ? ' AND ts >= ?' : ''}`, ...p)
       .one();
     const byModel = this.sql
       .exec(
         `SELECT COALESCE(model, '(unknown)') AS model, SUM(cost_usd) AS cost, SUM(input_tokens) AS itok, SUM(output_tokens) AS otok
          FROM usage_records${w} GROUP BY model ORDER BY cost DESC`,
+        ...p,
       )
       .toArray()
       .map((r) => ({ model: r.model as string, costUsd: Number(r.cost), inputTokens: Number(r.itok), outputTokens: Number(r.otok) }));
     const byAgent = this.sql
-      .exec(`SELECT agent_id, SUM(cost_usd) AS cost FROM usage_records${w} GROUP BY agent_id ORDER BY cost DESC`)
+      .exec(`SELECT agent_id, SUM(cost_usd) AS cost FROM usage_records${w} GROUP BY agent_id ORDER BY cost DESC`, ...p)
       .toArray()
       .map((r) => ({ agentId: r.agent_id as string, costUsd: Number(r.cost) }));
     const byCard = this.sql
-      .exec(`SELECT card_id, SUM(cost_usd) AS cost FROM usage_records${w} GROUP BY card_id ORDER BY cost DESC`)
+      .exec(`SELECT card_id, SUM(cost_usd) AS cost FROM usage_records${w} GROUP BY card_id ORDER BY cost DESC`, ...p)
       .toArray()
       .map((r) => ({ cardId: r.card_id as string, costUsd: Number(r.cost) }));
     return {

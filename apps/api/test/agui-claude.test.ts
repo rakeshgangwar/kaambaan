@@ -62,6 +62,12 @@ describe('normalizeClaudeStreamLine (Claude Code stream-json)', () => {
     expect(normalizeClaudeStreamLine(line)[0]!.type).toBe('error');
   });
 
+  it('omits usage when a result carries no cost or token data (no unpriced-record noise)', () => {
+    const out = normalizeClaudeStreamLine(JSON.stringify({ type: 'result', is_error: false, result: 'ok' }));
+    expect(out[0]!.type).toBe('response');
+    expect(out[0]!.usage).toBeUndefined();
+  });
+
   it('ignores blank lines, unparseable lines, and unmodeled event types', () => {
     expect(normalizeClaudeStreamLine('')).toEqual([]);
     expect(normalizeClaudeStreamLine('not json')).toEqual([]);

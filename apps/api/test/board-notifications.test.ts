@@ -43,6 +43,19 @@ describe('BoardDO — notifications (docs/07 §7)', () => {
     });
   });
 
+  it('notifies when a run is reclaimed (agent went dark)', async () => {
+    await runInDurableObject(stubFor('n-reclaim'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_nc', tenantId: 'tnt_a', name: 'NC', stages: BUILD });
+      await board.createCard({ title: 'Build', ownerUserId: 'usr_owner' });
+      const run = await board.claim({ agentId: 'agt_b', capabilities: ['build'] });
+      if (!run.claimed) throw new Error('claim');
+      // Force the heartbeat-timeout reclaim by passing an instant far past the deadline.
+      const reclaimed = board.reclaimExpired(9_999_999_999_999);
+      expect(reclaimed).toBe(1);
+      expect((await board.getNotifications()).some((n) => n.kind === 'reclaimed')).toBe(true);
+    });
+  });
+
   it('filters unread and marks a notification read', async () => {
     await runInDurableObject(stubFor('n-read'), async (board: BoardDO) => {
       await board.init({ id: 'brd_nr', tenantId: 'tnt_a', name: 'NR', stages: BUILD });

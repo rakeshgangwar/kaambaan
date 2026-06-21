@@ -34,21 +34,27 @@ export function normalizeClaudeStreamLine(line: string): NormalizedActivity[] {
       else if (block.type === 'tool_use') out.push({ type: 'action', action: block.name as string, parameter: block.input });
     }
     // Token usage is per-message — attach it to the first activity so it's counted exactly once.
+    // (A content-less assistant message would drop its usage here, but the terminal `result` event
+    // carries the authoritative cumulative total, so nothing is lost end-to-end.)
     if (usage && out.length > 0) out[0]!.usage = usage;
     return out;
   }
 
   if (ev.type === 'result') {
+    const usage =
+      ev.model !== undefined || ev.usage?.input_tokens !== undefined || ev.usage?.output_tokens !== undefined || ev.total_cost_usd !== undefined
+        ? {
+            model: ev.model as string | undefined,
+            inputTokens: ev.usage?.input_tokens as number | undefined,
+            outputTokens: ev.usage?.output_tokens as number | undefined,
+            costUsd: ev.total_cost_usd as number | undefined,
+          }
+        : undefined;
     return [
       {
         type: ev.is_error ? 'error' : 'response',
         body: typeof ev.result === 'string' ? (ev.result as string) : undefined,
-        usage: {
-          model: ev.model as string | undefined,
-          inputTokens: ev.usage?.input_tokens as number | undefined,
-          outputTokens: ev.usage?.output_tokens as number | undefined,
-          costUsd: ev.total_cost_usd as number | undefined,
-        },
+        ...(usage ? { usage } : {}),
       },
     ];
   }

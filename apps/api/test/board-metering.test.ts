@@ -169,6 +169,17 @@ describe('BoardDO — metering & budgets (docs/07 §6)', () => {
     });
   });
 
+  it("excludes a card's own in-flight run from its estimate (no self-skew)", async () => {
+    await runInDurableObject(stubFor('m-estimate-self'), async (board: BoardDO) => {
+      await board.init({ id: 'brd_eslf', tenantId: 'tnt_a', name: 'ESLF', stages: PIPELINE });
+      const { cardId, runId, leaseEpoch } = await claimCard(board);
+      await board.postActivity({ runId, leaseEpoch, type: 'action', usage: { costUsd: 5 } }); // in-flight, not completed
+      const est = await board.estimateCardCost(cardId);
+      expect(est.ok && est.value.estimatedUsd).toBeNull(); // its own running spend is not counted
+      expect(est.ok && est.value.sampleSize).toBe(0);
+    });
+  });
+
   it('returns no estimate when a stage has no history', async () => {
     await runInDurableObject(stubFor('m-estimate-none'), async (board: BoardDO) => {
       await board.init({ id: 'brd_en', tenantId: 'tnt_a', name: 'EN', stages: PIPELINE });
