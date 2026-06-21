@@ -14,8 +14,7 @@
     {
       "binding": "DB",
       "database_name": "kaambaan-catalog",
-      // Run `wrangler d1 create kaambaan-catalog` and paste the id here (needed before deploy).
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "62bba503-d61c-4318-8c30-a74f1ffa71ae",
       "migrations_dir": "migrations"
     }
   ],
