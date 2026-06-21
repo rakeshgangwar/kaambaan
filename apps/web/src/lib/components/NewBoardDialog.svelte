@@ -113,12 +113,12 @@
           class="bg-inset border-border focus:border-marigold w-full rounded-[7px] border px-3 py-2 text-sm outline-none"
         />
 
-        <div class="mt-4 flex items-center gap-2">
-          <span class="eyebrow">start from</span>
+        <div class="eyebrow mt-4 mb-2">start from a template</div>
+        <div class="flex flex-wrap gap-1.5">
           {#each BOARD_TEMPLATES as tpl (tpl.id)}
-            <button onclick={() => seedFrom(tpl.id)} class="border-border hover:border-marigold/60 mono text-muted-foreground hover:text-foreground rounded-[6px] border px-2 py-1 text-[11px]">{tpl.name}</button>
+            <button onclick={() => seedFrom(tpl.id)} title={tpl.description} class="border-border hover:border-marigold/60 mono text-muted-foreground hover:text-foreground rounded-[6px] border px-2 py-1 text-[11px]">{tpl.name}</button>
           {/each}
-          <button onclick={() => seedFrom('blank')} class="border-border hover:border-marigold/60 mono text-muted-foreground hover:text-foreground rounded-[6px] border px-2 py-1 text-[11px]">Blank</button>
+          <button onclick={() => seedFrom('blank')} title="Start with one empty stage" class="border-border hover:border-marigold/60 mono text-muted-foreground hover:text-foreground rounded-[6px] border px-2 py-1 text-[11px]">Blank</button>
         </div>
 
         <div class="eyebrow mt-5 mb-2">stages</div>

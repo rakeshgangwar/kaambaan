@@ -164,11 +164,71 @@ export const BOARD_TEMPLATES: BoardTemplate[] = [
   {
     id: 'agent-pipeline',
     name: 'Agent pipeline',
-    description: 'Research → Review (your approval) → Publish. Agents work the Research & Publish lanes; you approve in the middle.',
+    description: 'A general agent flow: Research → Review (your approval) → Publish.',
     stages: [
       { key: 'research', name: 'Research', order: 0, ownerKind: 'capability', owner: 'research' },
       { key: 'review', name: 'Review', order: 1, ownerKind: 'human', gate: 'approval' },
       { key: 'publish', name: 'Publish', order: 2, ownerKind: 'capability', owner: 'publish' },
+    ],
+  },
+  {
+    id: 'software',
+    name: 'Software delivery',
+    description: 'Ship code with a review gate: Backlog → Implement → Code review → QA → Deploy.',
+    stages: [
+      { key: 'backlog', name: 'Backlog', order: 0, ownerKind: 'human' },
+      { key: 'implement', name: 'Implement', order: 1, ownerKind: 'capability', owner: 'code', wipLimit: 3 },
+      { key: 'code-review', name: 'Code review', order: 2, ownerKind: 'human', gate: 'approval' },
+      { key: 'qa', name: 'QA', order: 3, ownerKind: 'capability', owner: 'test' },
+      { key: 'deploy', name: 'Deploy', order: 4, ownerKind: 'capability', owner: 'deploy' },
+    ],
+  },
+  {
+    id: 'content',
+    name: 'Content production',
+    description: 'Idea to published: Brief → Research → Draft → Edit → Publish.',
+    stages: [
+      { key: 'brief', name: 'Brief', order: 0, ownerKind: 'human' },
+      { key: 'research', name: 'Research', order: 1, ownerKind: 'capability', owner: 'research' },
+      { key: 'draft', name: 'Draft', order: 2, ownerKind: 'capability', owner: 'writing' },
+      { key: 'edit', name: 'Edit', order: 3, ownerKind: 'human', gate: 'approval' },
+      { key: 'publish', name: 'Publish', order: 4, ownerKind: 'capability', owner: 'publish' },
+    ],
+  },
+  {
+    id: 'support',
+    name: 'Support triage',
+    description: 'Resolve tickets with oversight: Inbox → Triage → Draft reply → Approve → Send.',
+    stages: [
+      { key: 'inbox', name: 'Inbox', order: 0, ownerKind: 'human' },
+      { key: 'triage', name: 'Triage', order: 1, ownerKind: 'capability', owner: 'triage' },
+      { key: 'draft-reply', name: 'Draft reply', order: 2, ownerKind: 'capability', owner: 'support' },
+      { key: 'approve', name: 'Approve', order: 3, ownerKind: 'human', gate: 'approval' },
+      { key: 'send', name: 'Send', order: 4, ownerKind: 'capability', owner: 'send' },
+    ],
+  },
+  {
+    id: 'research-report',
+    name: 'Research report',
+    description: 'Question to report: Question → Gather → Analyze → Review → Report.',
+    stages: [
+      { key: 'question', name: 'Question', order: 0, ownerKind: 'human' },
+      { key: 'gather', name: 'Gather', order: 1, ownerKind: 'capability', owner: 'research' },
+      { key: 'analyze', name: 'Analyze', order: 2, ownerKind: 'capability', owner: 'analysis' },
+      { key: 'review', name: 'Review', order: 3, ownerKind: 'human', gate: 'approval' },
+      { key: 'report', name: 'Report', order: 4, ownerKind: 'capability', owner: 'writing' },
+    ],
+  },
+  {
+    id: 'data',
+    name: 'Data pipeline',
+    description: 'Move + check data: Source → Extract → Transform → Validate → Load.',
+    stages: [
+      { key: 'source', name: 'Source', order: 0, ownerKind: 'human' },
+      { key: 'extract', name: 'Extract', order: 1, ownerKind: 'capability', owner: 'extract' },
+      { key: 'transform', name: 'Transform', order: 2, ownerKind: 'capability', owner: 'transform' },
+      { key: 'validate', name: 'Validate', order: 3, ownerKind: 'human', gate: 'approval' },
+      { key: 'load', name: 'Load', order: 4, ownerKind: 'capability', owner: 'load' },
     ],
   },
   {
