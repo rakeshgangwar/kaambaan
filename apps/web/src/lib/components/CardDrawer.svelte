@@ -36,6 +36,8 @@
   let editTitle = $state('');
   let editPriority = $state(0);
   let editDesc = $state('');
+  let editLabels = $state('');
+  let editAC = $state('');
   let savingCard = $state(false);
   let newRefUrl = $state('');
   let localError = $state<string | null>(null);
@@ -85,6 +87,10 @@
     editTitle = card.title;
     editPriority = card.priority;
     editDesc = (card.spec?.description as string | undefined) ?? '';
+    const existingLabels = Array.isArray(card.spec?.labels) ? (card.spec!.labels as string[]) : [];
+    editLabels = existingLabels.join(', ');
+    const existingAC = Array.isArray(card.spec?.acceptanceCriteria) ? (card.spec!.acceptanceCriteria as string[]) : [];
+    editAC = existingAC.join('\n');
     editing = true;
   }
 
@@ -92,7 +98,14 @@
     if (!boardId || !cardId || editTitle.trim() === '') return;
     savingCard = true;
     try {
-      const spec = { ...(card?.spec ?? {}), description: editDesc };
+      const labels = editLabels.split(',').map((l) => l.trim()).filter(Boolean);
+      const ac = editAC.split('\n').map((l) => l.trim()).filter(Boolean);
+      const spec = {
+        ...(card?.spec ?? {}),
+        description: editDesc,
+        labels,
+        acceptanceCriteria: ac,
+      };
       const res = await updateCard(boardId, cardId, { title: editTitle.trim(), priority: Number(editPriority) || 0, spec });
       if (!res.ok) localError = `Couldn't save the card (${res.status})`;
       editing = false;
@@ -236,7 +249,7 @@
     <button class="absolute inset-0 bg-black/55" onclick={close} aria-label="Close drawer" tabindex="-1"></button>
 
     <!-- drawer panel -->
-    <aside class="bg-surface border-border drawer-in relative flex h-full w-full max-w-[520px] flex-col border-l shadow-2xl">
+    <aside class="bg-surface border-border drawer-in relative flex h-full w-full flex-col border-l shadow-2xl sm:max-w-[520px]">
 
       <!-- dw-head -->
       <div class="dw-head border-border border-b p-4 pb-3.5 flex-none">
@@ -250,6 +263,21 @@
               <input type="number" bind:value={editPriority} class="bg-inset border-border focus:border-marigold w-16 rounded-[5px] border px-1.5 py-1 outline-none" />
             </label>
             <textarea bind:value={editDesc} rows="3" placeholder="Description / brief for the agent…" class="bg-inset border-border focus:border-marigold mt-2 w-full resize-none rounded-[6px] border px-2.5 py-2 text-xs outline-none"></textarea>
+            <label for="edit-labels" class="text-muted-foreground mono mt-3 block text-[11px] uppercase tracking-widest">Labels <span class="normal-case">(comma-separated)</span></label>
+            <input
+              id="edit-labels"
+              bind:value={editLabels}
+              placeholder="bug, frontend, urgent"
+              class="bg-inset border-border focus:border-marigold mt-1 w-full rounded-[6px] border px-2.5 py-1.5 text-xs outline-none"
+            />
+            <label for="edit-ac" class="text-muted-foreground mono mt-3 block text-[11px] uppercase tracking-widest">Acceptance Criteria <span class="normal-case">(one per line)</span></label>
+            <textarea
+              id="edit-ac"
+              bind:value={editAC}
+              rows="3"
+              placeholder={"User can log in\nError messages are shown\nAll tests pass"}
+              class="bg-inset border-border focus:border-marigold mt-1 w-full resize-none rounded-[6px] border px-2.5 py-2 text-xs outline-none"
+            ></textarea>
             <div class="mt-2.5 flex gap-1.5">
               <Button size="sm" onclick={saveCard} disabled={savingCard || editTitle.trim() === ''}>{savingCard ? 'Saving…' : 'Save'}</Button>
               <Button size="sm" variant="ghost" onclick={() => (editing = false)}>Cancel</Button>

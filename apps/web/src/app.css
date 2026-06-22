@@ -766,11 +766,25 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* kill all keyframe animations */
   .live-dot,
-  .drawer-in {
+  .drawer-in,
+  .cmdk-box {
     animation: none;
   }
-  .tile {
+
+  /* kill transitions: tiles, bars, cost meters, telemetry tracks */
+  .tile,
+  .costbar-fill,
+  .tele-burn > i,
+  .tele-track > i,
+  .triage-item,
+  .triage-review-btn {
+    transition: none;
+  }
+
+  /* flow arrow: static, no hover spring */
+  .flow-arrow {
     transition: none;
   }
 }
