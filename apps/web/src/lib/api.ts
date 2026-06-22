@@ -46,6 +46,7 @@ export interface Card {
   costUsd: number;
   overBudget: boolean;
   attemptCount: number;
+  delegateAgentId?: string | null;
 }
 
 export interface Attempt {

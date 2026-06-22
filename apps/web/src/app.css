@@ -135,6 +135,109 @@
     border-left: 2px solid var(--coral);
   }
 
+  /* priority chip — P1 coral, P2 marigold, P3+ muted */
+  .pri-chip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 5px;
+    flex: none;
+  }
+  .pri-chip-1 {
+    color: var(--coral);
+    background: rgba(255, 107, 87, 0.13);
+  }
+  .pri-chip-2 {
+    color: var(--marigold);
+    background: rgba(244, 165, 38, 0.13);
+  }
+  .pri-chip-3 {
+    color: var(--muted);
+    background: var(--inset);
+  }
+
+  /* label pill */
+  .lbl-pill {
+    font-size: 10.5px;
+    padding: 1px 7px;
+    border-radius: 20px;
+    background: var(--inset);
+    color: var(--muted);
+    border: 1px solid var(--line);
+  }
+
+  /* reference chip on the tile */
+  .refchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    background: var(--inset);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 1px 6px;
+    margin-bottom: 6px;
+  }
+  .refchip-st {
+    padding: 0 4px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .refchip-st-draft {
+    color: var(--muted);
+  }
+  .refchip-st-ready {
+    color: var(--live);
+  }
+  .refchip-st-merged {
+    color: #b48bff;
+  }
+
+  /* cost bar */
+  .costbar {
+    height: 3px;
+    border-radius: 3px;
+    background: var(--inset);
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .costbar-fill {
+    display: block;
+    height: 100%;
+    background: var(--live);
+    transition: width 1.2s ease;
+  }
+  .costbar-fill-over {
+    background: var(--coral);
+  }
+
+  /* state pill (list view) */
+  .statepill {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 20px;
+  }
+  .statepill-working {
+    color: var(--live);
+    background: rgba(52, 211, 182, 0.12);
+  }
+  .statepill-ready {
+    color: var(--marigold);
+    background: rgba(244, 165, 38, 0.12);
+  }
+  .statepill-gate {
+    color: var(--coral);
+    background: rgba(255, 107, 87, 0.12);
+  }
+  .statepill-done {
+    color: var(--muted);
+    background: var(--inset);
+  }
+
   .drawer-in {
     animation: drawer-in 0.16s ease-out;
   }

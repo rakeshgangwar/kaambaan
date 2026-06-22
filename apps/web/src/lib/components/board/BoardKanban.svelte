@@ -1,0 +1,81 @@
+<script lang="ts">
+  import { app } from '$lib/stores/app.svelte';
+  import { columnDropTarget } from '$lib/dnd';
+  import CardTile from './CardTile.svelte';
+
+  // local drag-over tracking (no external state needed)
+  let overStage = $state<string | null>(null);
+
+  function cardsInStage(stageKey: string) {
+    return app.filteredCards().filter((c) => c.currentStageKey === stageKey);
+  }
+</script>
+
+{#if app.board}
+  {@const board = app.board}
+  {@const stages = [...board.stages].sort((a, b) => a.order - b.order)}
+
+  <!-- the directed flight path: stages are waypoints, work flows → -->
+  <div class="mt-4 flex items-start overflow-x-auto pb-6">
+    {#each stages as stage, i (stage.key)}
+      {@const cards = cardsInStage(stage.key)}
+      {@const overLimit = stage.wipLimit !== undefined && cards.length >= stage.wipLimit}
+
+      {#if i > 0}
+        <!-- marigold flow arrow between columns -->
+        <div class="flow-arrow px-2.5">
+          <svg
+            class="size-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </div>
+      {/if}
+
+      <section
+        class="lane w-72 shrink-0 rounded-[12px] p-2 transition-[box-shadow,background-color] {overStage === stage.key ? 'ring-marigold bg-card ring-2' : 'bg-card/40'}"
+        use:columnDropTarget={{
+          stageKey: stage.key,
+          onDrop: (cardId) => app.moveCard(cardId, stage.key),
+          onOver: (o) => (overStage = o ? stage.key : overStage === stage.key ? null : overStage),
+        }}
+      >
+        <!-- waypoint header -->
+        <div class="lane-head flex h-[30px] items-center gap-2 px-1.5">
+          <span class="wordmark text-[13px] tracking-wide">{stage.name}</span>
+          <span class="mono text-xs {overLimit ? 'text-coral' : 'text-muted-foreground'}">
+            {cards.length}{#if stage.wipLimit !== undefined}/{stage.wipLimit}{/if}
+          </span>
+          <span class="ml-auto flex items-center gap-1.5">
+            {#if stage.gate === 'approval'}
+              <span class="eyebrow text-coral" title="Approval gate">gate</span>
+            {/if}
+            {#if stage.routing === 'manager'}
+              <span class="eyebrow" title="Manager routing">mgr</span>
+            {/if}
+          </span>
+        </div>
+
+        <!-- cards -->
+        <div class="lane-body mt-1.5 flex min-h-12 flex-col gap-2.5">
+          {#if cards.length === 0}
+            <!-- ghost lane: awaiting work -->
+            <div class="eyebrow border-border/60 mx-1 rounded-[8px] border border-dashed px-2 py-4 text-center">
+              awaiting work
+            </div>
+          {/if}
+          {#each cards as card (card.id)}
+            <CardTile {card} />
+          {/each}
+        </div>
+      </section>
+    {/each}
+  </div>
+{/if}

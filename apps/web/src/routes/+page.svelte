@@ -1,25 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    createBoard,
-    getBoard,
-    getBoards,
-    createCard,
     updateCard,
     deleteCard,
     addReference,
-    moveCard,
     resolveGate,
-    openBoardSocket,
     getAttempts,
     getCardActivities,
-    getNotifications,
     markNotificationRead,
-    getMe,
     logout,
     createAgent,
     getAgents,
-    deleteBoard,
     deleteAgent,
     setBudget,
     getEstimate,
@@ -30,22 +21,26 @@
     type GateDecision,
     type Attempt,
     type CardActivities,
-    type Notification,
-    type User,
     type AgentToken,
   } from '$lib/api';
   import { Button } from '$lib/components/ui/button';
   import NewBoardDialog from '$lib/components/NewBoardDialog.svelte';
   import BoardSettings from '$lib/components/BoardSettings.svelte';
-  import { cardDraggable, columnDropTarget } from '$lib/dnd';
+  import BoardKanban from '$lib/components/board/BoardKanban.svelte';
+  import { app } from '$lib/stores/app.svelte';
 
-  const BOARD_KEY = 'kaambaan.boardId';
+  // ---- store aliases (single source of truth) ----
+  const board = $derived(app.board);
+  const authState = $derived(app.authState);
+  const user = $derived(app.user);
+  const needsBoard = $derived(app.needsBoard);
+  const connected = $derived(app.connected);
+  const boardId = $derived(app.boardId);
+  const notifications = $derived(app.notifications);
 
-  // auth + onboarding
-  let authState = $state<'loading' | 'signed-out' | 'ready'>('loading');
-  let user = $state<User | null>(null);
-  let needsBoard = $state(false); // signed in but no boards yet → onboarding
+  // ---- page-local UI state (modals, drawer, form inputs) ----
   let creating = $state(false);
+  let error = $state<string | null>(null);
 
   // boards (switcher + create from a template)
   let boards = $state<BoardSummary[]>([]);
@@ -68,15 +63,7 @@
   let minted = $state<AgentToken | null>(null);
   let minting = $state(false);
 
-  let board = $state<BoardSnapshot | null>(null);
   let title = $state('');
-  let error = $state<string | null>(null);
-  let connected = $state(false);
-  let overStage = $state<string | null>(null);
-  let socket: WebSocket | undefined;
-
-  let notifications = $state<Notification[]>([]);
-  let showNotifications = $state(false);
 
   // card drawer (session replay, docs/07 §4)
   let openCardId = $state<string | null>(null);
@@ -93,18 +80,49 @@
   let savingCard = $state(false);
   let newRefUrl = $state('');
 
-  let boardId = $state<string | null>(null);
+  let showNotifications = $state(false);
 
-  async function refresh(): Promise<void> {
-    if (!boardId) return;
-    try {
-      board = await getBoard(boardId);
-      notifications = await getNotifications(boardId);
-      await refreshDrawer();
-    } catch (e) {
-      error = String(e);
+  // views + filters (Linear-style) – kept local so filter state is per-session
+  type CardFilters = { states: string[]; owners: string[]; minPriority: number | null; needsReview: boolean; live: boolean; overBudget: boolean };
+  let view = $state<'board' | 'list'>('board');
+  let listGroupBy = $state<'stage' | 'state' | 'owner' | 'priority'>('stage');
+  let showFilterMenu = $state(false);
+  let filters = $state<CardFilters>({ states: [], owners: [], minPriority: null, needsReview: false, live: false, overBudget: false });
+
+  const boardStates = $derived(board ? [...new Set(board.cards.map((c) => c.state))].sort() : []);
+  const boardOwners = $derived(board ? [...new Set(board.cards.map((c) => c.ownerUserId))].sort() : []);
+
+  const filteredCards = $derived(
+    !board
+      ? []
+      : board.cards.filter((c) => {
+          if (filters.states.length && !filters.states.includes(c.state)) return false;
+          if (filters.owners.length && !filters.owners.includes(c.ownerUserId)) return false;
+          if (filters.minPriority !== null && c.priority < filters.minPriority) return false;
+          if (filters.needsReview && !board!.gates.some((g) => g.cardId === c.id)) return false;
+          if (filters.live && c.state !== 'working') return false;
+          if (filters.overBudget && !c.overBudget) return false;
+          return true;
+        }),
+  );
+
+  const activeFilterCount = $derived(
+    filters.states.length + filters.owners.length + (filters.minPriority !== null ? 1 : 0) + (filters.needsReview ? 1 : 0) + (filters.live ? 1 : 0) + (filters.overBudget ? 1 : 0),
+  );
+
+  const listGroups = $derived.by(() => {
+    if (!board) return [] as Array<{ key: string; label: string; cards: BoardSnapshot['cards'] }>;
+    const cards = filteredCards;
+    let groups: Array<{ key: string; label: string; cards: BoardSnapshot['cards'] }>;
+    if (listGroupBy === 'stage') {
+      groups = board.stages.map((s) => ({ key: s.key, label: s.name, cards: cards.filter((c) => c.currentStageKey === s.key) }));
+    } else {
+      const keyOf = (c: BoardSnapshot['cards'][number]) => (listGroupBy === 'state' ? c.state : listGroupBy === 'owner' ? c.ownerUserId : `P${c.priority}`);
+      const keys = [...new Set(cards.map(keyOf))].sort();
+      groups = keys.map((k) => ({ key: k, label: k, cards: cards.filter((c) => keyOf(c) === k) }));
     }
-  }
+    return groups.filter((g) => g.cards.length > 0);
+  });
 
   const mcpSnippet = $derived(
     minted
@@ -115,6 +133,111 @@
   const openCard = $derived(board && openCardId ? (board.cards.find((c) => c.id === openCardId) ?? null) : null);
   const openCardGate = $derived(openCardId ? gateFor(openCardId) : undefined);
 
+  const unreadCount = $derived(notifications.filter((n) => !n.read).length);
+
+  // ---- refresh: delegates to store, then refreshes drawer ----
+  async function refresh(): Promise<void> {
+    await app.refresh();
+    await refreshDrawer();
+  }
+
+  // ---- board lifecycle (delegate to store) ----
+  async function openBoard(id: string): Promise<void> {
+    showBoardMenu = false;
+    await app.openBoard(id);
+    boards = app.boards;
+    agents = app.agents;
+  }
+
+  async function switchBoard(id: string): Promise<void> {
+    showBoardMenu = false;
+    if (id !== boardId) await openBoard(id);
+  }
+
+  async function onDeleteBoard(id: string): Promise<void> {
+    await app.deleteBoard(id);
+    if (app.error) {
+      error = app.error;
+    }
+    boards = app.boards;
+  }
+
+  onMount(() => {
+    void app.init().then(() => {
+      boards = app.boards;
+      agents = app.agents;
+    });
+    return () => app.dispose();
+  });
+
+  async function createFirstBoard(): Promise<void> {
+    creating = true;
+    try {
+      await app.createFirstBoard();
+      if (app.error) error = app.error;
+      boards = app.boards;
+    } finally {
+      creating = false;
+    }
+  }
+
+  async function onLogout(): Promise<void> {
+    await logout();
+    location.reload();
+  }
+
+  async function openAgents(): Promise<void> {
+    showConnect = true;
+    minted = null;
+    try {
+      agents = await getAgents();
+    } catch {
+      agents = [];
+    }
+  }
+
+  function toggleCap(cap: string): void {
+    newCaps = newCaps.includes(cap) ? newCaps.filter((c) => c !== cap) : [...newCaps, cap];
+  }
+
+  async function mintAgent(): Promise<void> {
+    if (agentName.trim() === '' || newCaps.length === 0) return;
+    minting = true;
+    try {
+      minted = await createAgent(agentName.trim(), [...newCaps]);
+      agentName = '';
+      agents = await getAgents();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      minting = false;
+    }
+  }
+
+  async function onDeleteAgent(id: string): Promise<void> {
+    const res = await deleteAgent(id);
+    if (res.ok) agents = await getAgents();
+  }
+
+  function closeConnect(): void {
+    showConnect = false;
+    minted = null;
+    agentName = '';
+  }
+
+  async function onAdd(e: SubmitEvent): Promise<void> {
+    e.preventDefault();
+    if (!boardId || title.trim() === '') return;
+    try {
+      await app.dispatchCard(title.trim());
+      title = '';
+      if (app.error) error = app.error;
+    } catch (err) {
+      error = String(err);
+    }
+  }
+
+  // ---- drawer ----
   async function openDrawer(cardId: string): Promise<void> {
     openCardId = cardId;
     gateComment = '';
@@ -227,227 +350,17 @@
     }
   }
 
-  const unreadCount = $derived(notifications.filter((n) => !n.read).length);
-
   async function onMarkRead(seq: number): Promise<void> {
     if (!boardId) return;
     await markNotificationRead(boardId, seq);
     await refresh();
   }
 
-  async function loadBoards(): Promise<void> {
-    try {
-      boards = await getBoards();
-    } catch {
-      /* the switcher list is best-effort */
-    }
-  }
-
-  async function openBoard(id: string): Promise<void> {
-    boardId = id;
-    needsBoard = false;
-    showBoardMenu = false;
-    localStorage.setItem(BOARD_KEY, id);
-    await refresh();
-    await loadBoards();
-    socket?.close();
-    socket = openBoardSocket(id, refresh);
-    socket.addEventListener('open', () => (connected = true));
-    socket.addEventListener('close', () => (connected = false));
-  }
-
-  async function switchBoard(id: string): Promise<void> {
-    showBoardMenu = false;
-    if (id !== boardId) await openBoard(id);
-  }
-
-  async function onDeleteBoard(id: string): Promise<void> {
-    const res = await deleteBoard(id);
-    if (!res.ok) {
-      error = `Couldn't delete that board (${res.status})`;
-      return;
-    }
-    await loadBoards();
-    if (id === boardId) {
-      const next = boards[0];
-      if (next) {
-        await openBoard(next.id);
-      } else {
-        boardId = null;
-        board = null;
-        localStorage.removeItem(BOARD_KEY);
-        needsBoard = true;
-        socket?.close();
-      }
-    }
-  }
-
-  onMount(() => {
-    void (async () => {
-      try {
-        user = await getMe();
-        if (!user) {
-          authState = 'signed-out';
-          return;
-        }
-        authState = 'ready';
-        // Pick a board: the last one used, else the workspace's most recent, else onboarding.
-        let id = localStorage.getItem(BOARD_KEY);
-        if (id) {
-          try {
-            await getBoard(id);
-          } catch {
-            id = null;
-            localStorage.removeItem(BOARD_KEY);
-          }
-        }
-        if (!id) {
-          await loadBoards();
-          id = boards[0]?.id ?? null;
-        }
-        if (!id) {
-          needsBoard = true; // new workspace → show onboarding
-          return;
-        }
-        await openBoard(id);
-      } catch (e) {
-        error = String(e);
-      }
-    })();
-    return () => socket?.close();
-  });
-
-  async function createFirstBoard(): Promise<void> {
-    creating = true;
-    try {
-      // Default a new user into the agent pipeline so their board is workable by agents from day one.
-      await openBoard(await createBoard('My first board', BOARD_TEMPLATES[0]!.stages));
-    } catch (e) {
-      error = String(e);
-    } finally {
-      creating = false;
-    }
-  }
-
-  async function onLogout(): Promise<void> {
-    await logout();
-    location.reload();
-  }
-
-  async function openAgents(): Promise<void> {
-    showConnect = true;
-    minted = null;
-    try {
-      agents = await getAgents();
-    } catch {
-      agents = [];
-    }
-  }
-
-  function toggleCap(cap: string): void {
-    newCaps = newCaps.includes(cap) ? newCaps.filter((c) => c !== cap) : [...newCaps, cap];
-  }
-
-  async function mintAgent(): Promise<void> {
-    if (agentName.trim() === '' || newCaps.length === 0) return;
-    minting = true;
-    try {
-      minted = await createAgent(agentName.trim(), [...newCaps]);
-      agentName = '';
-      agents = await getAgents();
-    } catch (e) {
-      error = String(e);
-    } finally {
-      minting = false;
-    }
-  }
-
-  async function onDeleteAgent(id: string): Promise<void> {
-    const res = await deleteAgent(id);
-    if (res.ok) agents = await getAgents();
-  }
-
-  function closeConnect(): void {
-    showConnect = false;
-    minted = null;
-    agentName = '';
-  }
-
-  async function onAdd(e: SubmitEvent): Promise<void> {
-    e.preventDefault();
-    if (!boardId || title.trim() === '') return;
-    try {
-      await createCard(boardId, title.trim());
-      title = '';
-      await refresh();
-    } catch (err) {
-      error = String(err);
-    }
-  }
-
-  async function onDropCard(stageKey: string, cardId: string): Promise<void> {
-    if (!boardId) return;
-    const res = await moveCard(boardId, cardId, stageKey);
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
-      error = body?.error?.message ?? `Move failed (${res.status})`;
-    } else {
-      error = null;
-    }
-    await refresh();
-  }
-
-  // views + filters (Linear-style) ---------------------------------------
-  type CardFilters = { states: string[]; owners: string[]; minPriority: number | null; needsReview: boolean; live: boolean; overBudget: boolean };
-  let view = $state<'board' | 'list'>('board');
-  let listGroupBy = $state<'stage' | 'state' | 'owner' | 'priority'>('stage');
-  let showFilterMenu = $state(false);
-  let filters = $state<CardFilters>({ states: [], owners: [], minPriority: null, needsReview: false, live: false, overBudget: false });
-
-  const boardStates = $derived(board ? [...new Set(board.cards.map((c) => c.state))].sort() : []);
-  const boardOwners = $derived(board ? [...new Set(board.cards.map((c) => c.ownerUserId))].sort() : []);
-
-  const filteredCards = $derived(
-    !board
-      ? []
-      : board.cards.filter((c) => {
-          if (filters.states.length && !filters.states.includes(c.state)) return false;
-          if (filters.owners.length && !filters.owners.includes(c.ownerUserId)) return false;
-          if (filters.minPriority !== null && c.priority < filters.minPriority) return false;
-          if (filters.needsReview && !board!.gates.some((g) => g.cardId === c.id)) return false;
-          if (filters.live && c.state !== 'working') return false;
-          if (filters.overBudget && !c.overBudget) return false;
-          return true;
-        }),
-  );
-
-  const activeFilterCount = $derived(
-    filters.states.length + filters.owners.length + (filters.minPriority !== null ? 1 : 0) + (filters.needsReview ? 1 : 0) + (filters.live ? 1 : 0) + (filters.overBudget ? 1 : 0),
-  );
-
-  const listGroups = $derived.by(() => {
-    if (!board) return [] as Array<{ key: string; label: string; cards: BoardSnapshot['cards'] }>;
-    const cards = filteredCards;
-    let groups: Array<{ key: string; label: string; cards: BoardSnapshot['cards'] }>;
-    if (listGroupBy === 'stage') {
-      groups = board.stages.map((s) => ({ key: s.key, label: s.name, cards: cards.filter((c) => c.currentStageKey === s.key) }));
-    } else {
-      const keyOf = (c: BoardSnapshot['cards'][number]) => (listGroupBy === 'state' ? c.state : listGroupBy === 'owner' ? c.ownerUserId : `P${c.priority}`);
-      const keys = [...new Set(cards.map(keyOf))].sort();
-      groups = keys.map((k) => ({ key: k, label: k, cards: cards.filter((c) => keyOf(c) === k) }));
-    }
-    return groups.filter((g) => g.cards.length > 0);
-  });
-
   function toggleIn(list: string[], value: string): string[] {
     return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
   }
   function clearFilters(): void {
     filters = { states: [], owners: [], minPriority: null, needsReview: false, live: false, overBudget: false };
-  }
-
-  function cardsIn(stageKey: string): BoardSnapshot['cards'] {
-    return filteredCards.filter((c) => c.currentStageKey === stageKey);
   }
 
   function stageLabel(key: string): string {
@@ -598,7 +511,7 @@
       </svg>
       <div class="wordmark text-lg">Kaambaan</div>
       <div class="mono text-muted-foreground flex items-center gap-2 text-xs">
-        <span class="live-dot"></span>{error ?? 'establishing link to the board…'}
+        <span class="live-dot"></span>{error ?? app.error ?? 'establishing link to the board…'}
       </div>
     </div>
   {:else}
@@ -758,13 +671,13 @@
       <Button type="submit">Dispatch</Button>
     </form>
 
-    {#if error}
+    {#if error || app.error}
       <p
         role="alert"
         class="border-coral/40 text-coral mono mt-3 rounded-[7px] border px-3 py-2 text-xs"
         style="background:rgba(255,107,87,.08)"
       >
-        {error}
+        {error ?? app.error}
       </p>
     {/if}
 
@@ -831,106 +744,8 @@
     </div>
 
     {#if view === 'board'}
-    <!-- the directed flight path: stages are waypoints, work flows → -->
-    <div class="mt-4 flex items-start overflow-x-auto pb-6">
-      {#each board.stages as stage, i (stage.key)}
-        {@const cards = cardsIn(stage.key)}
-        {@const overLimit = stage.wipLimit !== undefined && cards.length >= stage.wipLimit}
-        {#if i > 0}
-          <div class="flow-arrow px-2.5">
-            <svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M9 6l6 6-6 6" />
-            </svg>
-          </div>
-        {/if}
-        <section
-          class="w-64 shrink-0 rounded-[12px] p-2 transition-[box-shadow,background-color] {overStage === stage.key ? 'ring-marigold bg-card ring-2' : 'bg-card/40'}"
-          use:columnDropTarget={{
-            stageKey: stage.key,
-            onDrop: (cardId) => onDropCard(stage.key, cardId),
-            onOver: (o) => (overStage = o ? stage.key : overStage === stage.key ? null : overStage),
-          }}
-        >
-          <!-- waypoint -->
-          <div class="flex h-[30px] items-center gap-2 px-1.5">
-            <span class="wordmark text-[13px] tracking-wide">{stage.name}</span>
-            <span class="mono text-xs {overLimit ? 'text-coral' : 'text-muted-foreground'}">
-              {cards.length}{#if stage.wipLimit !== undefined}/{stage.wipLimit}{/if}
-            </span>
-            <span class="ml-auto flex items-center gap-1.5">
-              {#if stage.gate === 'approval'}<span class="eyebrow text-coral" title="Approval gate">gate</span>{/if}
-              {#if stage.routing === 'manager'}<span class="eyebrow" title="Manager routing">mgr</span>{/if}
-            </span>
-          </div>
-
-          <div class="mt-1.5 flex min-h-12 flex-col gap-2">
-            {#if cards.length === 0}
-              <div class="eyebrow border-border/60 mx-1 rounded-[8px] border border-dashed px-2 py-4 text-center">awaiting work</div>
-            {/if}
-            {#each cards as card (card.id)}
-              {@const gate = gateFor(card.id)}
-              <div
-                use:cardDraggable={{ cardId: card.id }}
-                role="button"
-                tabindex="0"
-                aria-label="Open {card.title}"
-                onclick={() => openDrawer(card.id)}
-                onkeydown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    openDrawer(card.id);
-                  }
-                }}
-                class="tile bg-inset border-border cursor-grab rounded-[10px] border p-3 text-left active:cursor-grabbing {gate ? 'tile-gate' : ''}"
-              >
-                <div class="flex items-start justify-between gap-2">
-                  <div class="text-[13px] leading-snug">{card.title}</div>
-                  {#if card.state === 'working'}<span class="live-dot mt-1 shrink-0" title="Agent working"></span>{/if}
-                </div>
-
-                <div class="text-muted-foreground mono mt-2 flex items-center justify-between text-[11px]">
-                  <span>{card.ownerUserId}</span>
-                  {#if card.costUsd > 0}
-                    <span title="Agent cost on this card" class={card.overBudget ? 'text-coral' : ''}>{fmtUsd(card.costUsd)}</span>
-                  {/if}
-                </div>
-
-                {#if refsFor(card.id).length > 0}
-                  <div class="mt-2 flex flex-wrap gap-1.5">
-                    {#each refsFor(card.id) as ref (ref.id)}
-                      {@const href = safeHref(ref.url)}
-                      {@const inner = `${refLabel(ref)}${subStateLabel(ref) ? ` · ${subStateLabel(ref)}` : ''}`}
-                      {#if href}
-                        <a {href} target="_blank" rel="noreferrer" title={ref.url} onclick={(e) => e.stopPropagation()} class="border-border hover:border-marigold/50 mono inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10px]">
-                          <span style="color:var(--marigold)">↗</span>{inner}
-                        </a>
-                      {:else}
-                        <span class="border-border mono inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10px]">{inner}</span>
-                      {/if}
-                    {/each}
-                  </div>
-                {/if}
-
-                {#if card.attemptCount > 1}
-                  <div class="text-muted-foreground mono mt-2 text-[11px]">×{card.attemptCount} attempts</div>
-                {/if}
-
-                {#if gate}
-                  <div class="border-border mt-2.5 border-t pt-2.5">
-                    <div class="eyebrow text-coral mb-1.5">awaiting your review</div>
-                    <div class="flex flex-wrap gap-1.5">
-                      <Button size="sm" onclick={(e) => { e.stopPropagation(); onResolve(gate.id, 'approve'); }}>Approve</Button>
-                      <Button size="sm" variant="outline" onclick={(e) => { e.stopPropagation(); openDrawer(card.id); }}>Changes…</Button>
-                      <Button size="sm" variant="ghost" onclick={(e) => { e.stopPropagation(); onResolve(gate.id, 'reject'); }}>Reject</Button>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        </section>
-      {/each}
-    </div>
+      <!-- board view: re-skinned kanban via the shared store -->
+      <BoardKanban />
     {:else}
       <!-- list view (Linear-style, grouped) -->
       <div class="mt-4 pb-10">
