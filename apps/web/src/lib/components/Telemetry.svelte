@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { getUsage, type UsageSummary } from '$lib/api';
   import { app } from '$lib/stores/app.svelte';
   import { agentColor, initialOf } from '$lib/components/agentColor';
@@ -27,9 +26,12 @@
   const totalOutput = $derived(usage?.totalOutputTokens ?? 0);
   const totalTokens = $derived(totalInput + totalOutput);
 
-  // card count from board
-  const cardCount = $derived(board?.cards.length ?? 0);
-  const avgCostPerCard = $derived(cardCount > 0 ? totalCost / cardCount : 0);
+  // avg cost per card — derived from usage window (consistent data window)
+  const avgCostPerCard = $derived(
+    usage && usage.byCard.length > 0
+      ? usage.totalCostUsd / Math.max(1, usage.byCard.length)
+      : null,
+  );
 
   // helper: agent name from id
   function agentName(id: string): string {
@@ -75,12 +77,8 @@
     }
   }
 
-  // re-fetch whenever boardId or window changes
+  // re-fetch whenever boardId or window changes (covers first render too)
   $effect(() => {
-    if (boardId) load(boardId, window_);
-  });
-
-  onMount(() => {
     if (boardId) load(boardId, window_);
   });
 </script>
@@ -109,7 +107,7 @@
     <!-- Spend / budget -->
     <div class="tele-metric">
       <div class="tele-metric-k">Spend / budget</div>
-      <div class="tele-metric-v" class:text-coral={overBudget}>
+      <div class="tele-metric-v" style={overBudget ? 'color:var(--coral)' : ''}>
         {usd(totalCost)}
         {#if budgetUsd}<small class="text-muted-foreground font-medium text-sm">/ {usd(budgetUsd)}</small>{/if}
       </div>
@@ -117,7 +115,10 @@
         <div class="tele-burn" class:tele-burn-over={overBudget}>
           <i style="width:{burnPct}%"></i>
         </div>
-        <div class="mono mt-1 text-[10px] {overBudget ? 'text-coral' : 'text-muted-foreground'}">
+        <div
+          class="mono mt-1 text-[10px]"
+          style={overBudget ? 'color:var(--coral)' : 'color:var(--muted-foreground)'}
+        >
           {burnPct}% of budget used{overBudget ? ' · over budget' : ''}
         </div>
       {:else}
@@ -128,8 +129,10 @@
     <!-- Avg cost / card -->
     <div class="tele-metric">
       <div class="tele-metric-k">Avg cost / card</div>
-      <div class="tele-metric-v">{usd(avgCostPerCard)}</div>
-      <div class="mono text-muted-foreground mt-1 text-[10px]">{cardCount} cards tracked</div>
+      <div class="tele-metric-v">{avgCostPerCard !== null ? usd(avgCostPerCard) : '—'}</div>
+      <div class="mono text-muted-foreground mt-1 text-[10px]">
+        {usage?.byCard.length ?? 0} cards with spend in window
+      </div>
     </div>
 
     <!-- Total tokens -->
