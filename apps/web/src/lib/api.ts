@@ -46,6 +46,7 @@ export interface Card {
   costUsd: number;
   overBudget: boolean;
   attemptCount: number;
+  delegateAgentId?: string | null;
 }
 
 export interface Attempt {
@@ -91,6 +92,18 @@ export interface BoardUsage {
   budgetUsd: number | null;
   cardUsdCap: number | null;
   overBudget: boolean;
+}
+
+/** Cost rollup from `GET /v1/boards/:id/usage` (docs/07 §6) — totals plus by-model/agent/card. */
+export interface UsageSummary {
+  totalCostUsd: number;
+  estimatedCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  unpricedRecords: number;
+  byModel: Array<{ model: string; costUsd: number; inputTokens: number; outputTokens: number }>;
+  byAgent: Array<{ agentId: string; costUsd: number }>;
+  byCard: Array<{ cardId: string; costUsd: number }>;
 }
 
 export interface GateOption {
@@ -365,6 +378,15 @@ export async function getEstimate(boardId: string, cardId: string): Promise<Esti
   const res = await fetch(`/v1/boards/${boardId}/cards/${cardId}/estimate`, { headers });
   if (!res.ok) return null;
   return (await res.json()) as Estimate;
+}
+
+/** Cost/usage rollup for the telemetry view; `window` filters to a recent span. */
+export async function getUsage(boardId: string, window: '5h' | '7d' = '7d'): Promise<UsageSummary> {
+  const res = await fetch(`/v1/boards/${boardId}/usage?window=${window}`, { headers });
+  if (!res.ok) {
+    return { totalCostUsd: 0, estimatedCostUsd: 0, totalInputTokens: 0, totalOutputTokens: 0, unpricedRecords: 0, byModel: [], byAgent: [], byCard: [] };
+  }
+  return (await res.json()) as UsageSummary;
 }
 
 /** The agents registered in the signed-in user's workspace. */
