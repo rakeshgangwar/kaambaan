@@ -134,11 +134,12 @@
     if (!res.ok) {
       const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
       localError = body?.error?.message ?? `Resolve failed (${res.status})`;
-    } else {
-      localError = null;
-      app.closeCard();
+      await app.refresh();
+      return;
     }
+    localError = null;
     await app.refresh();
+    app.closeCard();
   }
 
   // ---- helpers ----
