@@ -15,8 +15,11 @@
   {@const board = app.board}
   {@const stages = [...board.stages].sort((a, b) => a.order - b.order)}
 
-  <!-- the directed flight path: stages are waypoints, work flows → -->
-  <div class="mt-4 flex items-start overflow-x-auto pb-6">
+  <!-- the directed flight path: stages are waypoints, work flows →
+       No own overflow: the full-height screen container (in +page.svelte) is the scroller, so
+       horizontal scroll works across the whole viewport height, not just the lanes' height.
+       min-h-full makes the board fill the available height (drop targets + scroll region). -->
+  <div class="flex min-h-full items-start px-4 pt-4 pb-6">
     {#each stages as stage, i (stage.key)}
       {@const cards = cardsInStage(stage.key)}
       {@const overLimit = stage.wipLimit !== undefined && cards.length >= stage.wipLimit}
