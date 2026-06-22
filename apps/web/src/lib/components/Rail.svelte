@@ -101,16 +101,24 @@
   <!-- Spacer -->
   <div class="flex-1"></div>
 
-  <!-- Quick-jump -->
-  <div class="border-border border-t px-2 py-2">
+  <!-- Quick-jump + theme -->
+  <div class="border-border flex items-center gap-2 border-t px-2 py-2">
     <button
       onclick={() => app.toggleCmdk()}
-      class="mono border-border hover:border-marigold/40 flex w-full items-center justify-between rounded-[7px] border px-2.5 py-1.5 text-xs"
+      class="mono border-border hover:border-marigold/40 flex flex-1 items-center justify-between rounded-[7px] border px-2.5 py-1.5 text-xs"
       style="color:var(--muted)"
     >
       <span>Quick jump</span>
       <span class="text-[10px]">⌘K</span>
     </button>
+    <button
+      onclick={() => app.toggleTheme()}
+      title="Toggle theme"
+      aria-label="Toggle theme"
+      aria-pressed={app.theme === 'light'}
+      class="mono border-border hover:border-marigold/40 shrink-0 rounded-[7px] border px-2.5 py-1.5 text-sm leading-none"
+      style="color:var(--muted)"
+    >{app.theme === 'light' ? '☀' : '☾'}</button>
   </div>
 
   <!-- User footer -->
