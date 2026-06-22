@@ -656,7 +656,16 @@ export class BoardDO extends DurableObject<Env> {
       };
     }
     const now = this.now();
-    this.sql.exec(`UPDATE cards SET current_stage_key = ?, updated_at = ? WHERE id = ?`, target.key, now, cardId);
+    // A manual move overrides any in-flight review: cancel pending gates and return the card to a
+    // clean, claimable state. Without this, dragging a card off a human gate strands it in
+    // input-required with an orphaned pending gate that no agent can claim and no human can resolve.
+    this.sql.exec(`UPDATE gates SET status = 'cancelled', resolved_at = ? WHERE card_id = ? AND status = 'pending'`, now, cardId);
+    this.sql.exec(
+      `UPDATE cards SET current_stage_key = ?, state = 'submitted', delegate_agent_id = NULL, current_run_id = NULL, failure_count = 0, updated_at = ? WHERE id = ?`,
+      target.key,
+      now,
+      cardId,
+    );
     const updated = this.mustGetCard(cardId);
     this.emit('card.moved', {
       cardId,
