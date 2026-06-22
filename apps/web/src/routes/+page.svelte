@@ -1,32 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    updateCard,
-    deleteCard,
-    addReference,
-    resolveGate,
-    getAttempts,
-    getCardActivities,
     markNotificationRead,
     logout,
     createAgent,
     getAgents,
     deleteAgent,
     setBudget,
-    getEstimate,
-    type Estimate,
     BOARD_TEMPLATES,
     type BoardSnapshot,
     type BoardSummary,
-    type GateDecision,
-    type Attempt,
-    type CardActivities,
     type AgentToken,
   } from '$lib/api';
   import { Button } from '$lib/components/ui/button';
   import NewBoardDialog from '$lib/components/NewBoardDialog.svelte';
   import BoardSettings from '$lib/components/BoardSettings.svelte';
   import BoardKanban from '$lib/components/board/BoardKanban.svelte';
+  import CardDrawer from '$lib/components/CardDrawer.svelte';
   import { app, type CardFilters } from '$lib/stores/app.svelte';
 
   // ---- store aliases (single source of truth) ----
@@ -64,22 +54,6 @@
   let minting = $state(false);
 
   let title = $state('');
-
-  // card drawer (session replay, docs/07 §4)
-  // openCardId is the single source of truth — owned by the store so CardTile can open the drawer
-  const openCardId = $derived(app.openCardId);
-  let cardDetail = $state<CardActivities | null>(null);
-  let drawerAttempts = $state<Attempt[]>([]);
-  let cardEstimate = $state<Estimate | null>(null);
-  let gateComment = $state('');
-
-  // card edit
-  let editing = $state(false);
-  let editTitle = $state('');
-  let editPriority = $state(0);
-  let editDesc = $state('');
-  let savingCard = $state(false);
-  let newRefUrl = $state('');
 
   let showNotifications = $state(false);
 
@@ -130,15 +104,11 @@
       : '',
   );
 
-  const openCard = $derived(board && openCardId ? (board.cards.find((c) => c.id === openCardId) ?? null) : null);
-  const openCardGate = $derived(openCardId ? gateFor(openCardId) : undefined);
-
   const unreadCount = $derived(notifications.filter((n) => !n.read).length);
 
-  // ---- refresh: delegates to store, then refreshes drawer ----
+  // ---- refresh: delegates to store ----
   async function refresh(): Promise<void> {
     await app.refresh();
-    await refreshDrawer();
   }
 
   // ---- board lifecycle (delegate to store) ----
@@ -237,96 +207,10 @@
     }
   }
 
-  // ---- drawer ----
-  // $effect: watch app.openCardId (the single source of truth) and drive the drawer
-  $effect(() => {
-    const id = app.openCardId;
-    if (id !== null) {
-      // Card was opened (by CardTile or by openDrawer in list/history)
-      gateComment = '';
-      void refreshDrawer();
-    } else {
-      // Card was closed — reset local drawer state
-      cardDetail = null;
-      drawerAttempts = [];
-      cardEstimate = null;
-      editing = false;
-      newRefUrl = '';
-    }
-  });
-
   // $effect: sync page-local filters → store so BoardKanban sees them
   $effect(() => {
     app.filters = { ...filters };
   });
-
-  async function openDrawer(cardId: string): Promise<void> {
-    app.openCard(cardId);
-    // The $effect above will run refreshDrawer() when app.openCardId becomes non-null
-  }
-
-  function closeDrawer(): void {
-    app.closeCard();
-    // The $effect above will reset local drawer state when app.openCardId becomes null
-  }
-
-  function startEdit(): void {
-    if (!openCard) return;
-    editTitle = openCard.title;
-    editPriority = openCard.priority;
-    editDesc = (openCard.spec?.description as string | undefined) ?? '';
-    editing = true;
-  }
-
-  async function saveCard(): Promise<void> {
-    if (!boardId || !openCardId || editTitle.trim() === '') return;
-    savingCard = true;
-    try {
-      const spec = { ...(openCard?.spec ?? {}), description: editDesc };
-      const res = await updateCard(boardId, openCardId, { title: editTitle.trim(), priority: Number(editPriority) || 0, spec });
-      if (!res.ok) error = `Couldn't save the card (${res.status})`;
-      editing = false;
-      await refresh();
-    } finally {
-      savingCard = false;
-    }
-  }
-
-  async function onDeleteCard(): Promise<void> {
-    if (!boardId || !openCardId) return;
-    if (!confirm('Delete this card and its history? This cannot be undone.')) return;
-    const res = await deleteCard(boardId, openCardId);
-    if (res.ok) {
-      closeDrawer();
-      await refresh();
-    } else {
-      error = `Couldn't delete the card (${res.status})`;
-    }
-  }
-
-  async function addRef(): Promise<void> {
-    if (!boardId || !openCardId || newRefUrl.trim() === '') return;
-    const res = await addReference(boardId, openCardId, { url: newRefUrl.trim() });
-    if (res.ok) {
-      newRefUrl = '';
-      await refresh();
-    } else {
-      error = `Couldn't add that link (${res.status})`;
-    }
-  }
-
-  async function refreshDrawer(): Promise<void> {
-    if (!openCardId || !boardId) return;
-    try {
-      [cardDetail, drawerAttempts, cardEstimate] = await Promise.all([
-        getCardActivities(boardId, openCardId),
-        getAttempts(boardId, openCardId),
-        getEstimate(boardId, openCardId),
-      ]);
-    } catch {
-      /* drawer detail is best-effort */
-    }
-  }
 
   // budget editor ----------------------------------------------------------
   function openBudget(): void {
@@ -348,22 +232,6 @@
       await refresh();
     } finally {
       savingBudget = false;
-    }
-  }
-
-  function activityMarker(type: string): { glyph: string; color: string } {
-    if (type === 'action') return { glyph: '▸', color: 'var(--marigold)' };
-    if (type === 'response') return { glyph: '●', color: 'var(--live)' };
-    if (type === 'error') return { glyph: '✕', color: 'var(--coral)' };
-    if (type === 'elicitation') return { glyph: '?', color: 'var(--coral)' };
-    return { glyph: '·', color: 'var(--muted)' }; // thought
-  }
-
-  function fmtTime(ts: string): string {
-    try {
-      return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    } catch {
-      return ts;
     }
   }
 
@@ -426,24 +294,13 @@
     return `$${n.toFixed(2)}`;
   }
 
-  async function onResolve(gateId: string, decision: GateDecision, comment?: string): Promise<void> {
-    if (!boardId) return;
-    const res = await resolveGate(boardId, gateId, decision, comment?.trim() || undefined);
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
-      error = body?.error?.message ?? `Resolve failed (${res.status})`;
-    } else {
-      error = null;
-      closeDrawer();
-    }
-    await refresh();
-  }
+
 </script>
 
 <svelte:window
   onkeydown={(e) => {
     if (e.key === 'Escape') {
-      closeDrawer();
+      app.closeCard();
       closeConnect();
       showNotifications = false;
       showBoardMenu = false;
@@ -778,7 +635,7 @@
               {#each group.cards as card (card.id)}
                 {@const gate = gateFor(card.id)}
                 <button
-                  onclick={() => openDrawer(card.id)}
+                  onclick={() => app.openCard(card.id)}
                   class="border-border/40 hover:bg-inset/60 flex w-full items-center gap-3 border-b py-2.5 pr-1 pl-2 text-left {gate ? 'tile-gate' : ''}"
                 >
                   <span class="mono text-muted-foreground w-7 shrink-0 text-[11px]">{card.priority > 0 ? `P${card.priority}` : ''}</span>
@@ -799,160 +656,9 @@
     {/if}
   {/if}
 
-  <!-- card drawer: session replay (docs/07 §4) -->
-  {#if openCard}
-    {@const stageName = board?.stages.find((s) => s.key === openCard.currentStageKey)?.name ?? openCard.currentStageKey}
-    <div class="fixed inset-0 z-30 flex justify-end">
-      <button class="absolute inset-0 bg-black/55" onclick={closeDrawer} aria-label="Close drawer" tabindex="-1"></button>
-      <aside class="bg-surface border-border drawer-in relative flex h-full w-full max-w-[460px] flex-col border-l shadow-2xl">
-        <div class="border-border flex items-start justify-between gap-3 border-b p-4">
-          {#if editing}
-            <div class="min-w-0 flex-1">
-              <div class="eyebrow mb-2">edit card</div>
-              <input bind:value={editTitle} placeholder="Title" class="bg-inset border-border focus:border-marigold w-full rounded-[6px] border px-2.5 py-1.5 text-sm outline-none" />
-              <label class="text-muted-foreground mono mt-2 flex items-center gap-1.5 text-[11px]">
-                priority
-                <input type="number" bind:value={editPriority} class="bg-inset border-border focus:border-marigold w-16 rounded-[5px] border px-1.5 py-1 outline-none" />
-              </label>
-              <textarea bind:value={editDesc} rows="3" placeholder="Description / brief for the agent…" class="bg-inset border-border focus:border-marigold mt-2 w-full resize-none rounded-[6px] border px-2.5 py-2 text-xs outline-none"></textarea>
-              <div class="mt-2.5 flex gap-1.5">
-                <Button size="sm" onclick={saveCard} disabled={savingCard || editTitle.trim() === ''}>{savingCard ? 'Saving…' : 'Save'}</Button>
-                <Button size="sm" variant="ghost" onclick={() => (editing = false)}>Cancel</Button>
-              </div>
-            </div>
-          {:else}
-            <div class="min-w-0">
-              <div class="eyebrow mb-1.5">{stageName} · {openCard.state}{#if openCard.priority > 0} · P{openCard.priority}{/if}</div>
-              <h2 class="wordmark text-base leading-snug">{openCard.title}</h2>
-              <div class="text-muted-foreground mono mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px]">
-                <span>{openCard.ownerUserId}</span>
-                {#if openCard.costUsd > 0}<span class={openCard.overBudget ? 'text-coral' : ''}>{fmtUsd(openCard.costUsd)}</span>{/if}
-                {#if cardEstimate && cardEstimate.estimatedUsd !== null}
-                  <span title="Estimated cost for this stage, from {cardEstimate.sampleSize} similar run{cardEstimate.sampleSize === 1 ? '' : 's'}">~{fmtUsd(cardEstimate.estimatedUsd)} est</span>
-                {/if}
-                {#if openCard.state === 'working'}<span class="inline-flex items-center gap-1.5"><span class="live-dot"></span><span style="color:var(--live)">working</span></span>{/if}
-              </div>
-            </div>
-            <div class="flex shrink-0 items-center gap-1">
-              <button onclick={startEdit} aria-label="Edit card" title="Edit card" class="text-muted-foreground hover:text-foreground hover:bg-accent rounded-[7px] p-1.5">
-                <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
-              </button>
-              <button onclick={closeDrawer} class="text-muted-foreground hover:text-foreground hover:bg-accent rounded-[7px] p-1.5" aria-label="Close">
-                <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-              </button>
-            </div>
-          {/if}
-        </div>
-
-        <div class="flex-1 space-y-6 overflow-y-auto p-4">
-          {#if openCard.spec?.description}
-            {@const desc = String(openCard.spec?.description ?? '')}
-            <section>
-              <div class="eyebrow mb-2">description</div>
-              <p class="text-foreground/90 text-sm leading-relaxed whitespace-pre-wrap">{desc}</p>
-            </section>
-          {/if}
-
-          <section>
-            <div class="eyebrow mb-2">references</div>
-            {#if refsFor(openCard.id).length > 0}
-              <div class="mb-2.5 flex flex-wrap gap-1.5">
-                {#each refsFor(openCard.id) as ref (ref.id)}
-                  {@const href = safeHref(ref.url)}
-                  {@const inner = `${refLabel(ref)}${subStateLabel(ref) ? ` · ${subStateLabel(ref)}` : ''}`}
-                  {#if href}
-                    <a {href} target="_blank" rel="noreferrer" class="border-border hover:border-marigold/50 mono inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10px]"><span style="color:var(--marigold)">↗</span>{inner}</a>
-                  {:else}
-                    <span class="border-border mono inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[10px]">{inner}</span>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-            <div class="flex gap-1.5">
-              <input
-                bind:value={newRefUrl}
-                placeholder="https://… attach a link"
-                onkeydown={(e) => {
-                  if (e.key === 'Enter') addRef();
-                }}
-                class="bg-inset border-border focus:border-marigold flex-1 rounded-[6px] border px-2.5 py-1.5 text-xs outline-none"
-              />
-              <Button size="sm" variant="outline" onclick={addRef} disabled={newRefUrl.trim() === ''}>Add</Button>
-            </div>
-          </section>
-
-          {#if cardDetail?.handoff}
-            <section>
-              <div class="eyebrow mb-2">handoff from prior stage</div>
-              <div class="bg-inset border-border mono space-y-1 rounded-[8px] border p-3 text-[11px]">
-                {#each Object.entries(cardDetail.handoff) as [k, v] (k)}
-                  <div><span class="text-muted-foreground">{k}:</span> {typeof v === 'string' ? v : JSON.stringify(v)}</div>
-                {/each}
-              </div>
-            </section>
-          {/if}
-
-          {#if drawerAttempts.length > 1}
-            <section>
-              <div class="eyebrow mb-2">attempts · {drawerAttempts.length}</div>
-              <div class="space-y-1.5">
-                {#each drawerAttempts as a, i (a.runId)}
-                  <div class="bg-inset border-border mono flex items-center justify-between gap-2 rounded-[7px] border px-2.5 py-1.5 text-[11px]">
-                    <span class="text-muted-foreground truncate">{i + 1} · {a.agentId}{a.profileKey ? ` · ${a.profileKey}` : a.model ? ` · ${a.model}` : ''}</span>
-                    <span class="shrink-0">{fmtUsd(a.costUsd)}{a.outcome ? ` · ${a.outcome}` : ''}</span>
-                  </div>
-                {/each}
-              </div>
-            </section>
-          {/if}
-
-          <section>
-            <div class="eyebrow mb-3">session replay</div>
-            {#if !cardDetail || cardDetail.activities.length === 0}
-              <p class="text-muted-foreground text-xs">No recorded activity yet — this card hasn't been worked.</p>
-            {:else}
-              <ol class="border-border ml-1 space-y-4 border-l pl-4">
-                {#each cardDetail.activities as a (a.seq)}
-                  {@const m = activityMarker(a.type)}
-                  <li class="relative">
-                    <span class="mono absolute -left-[22px] top-px text-[12px]" style="color:{m.color}">{m.glyph}</span>
-                    <div class="flex items-baseline justify-between gap-2">
-                      <span class="eyebrow" style="color:{m.color}">{a.type}</span>
-                      <span class="text-muted-foreground mono text-[10px]">{fmtTime(a.ts)}</span>
-                    </div>
-                    {#if a.action}
-                      <div class="mono mt-1 text-[11px]"><span style="color:var(--marigold)">{a.action}</span>{#if a.parameter}<span class="text-muted-foreground"> {JSON.stringify(a.parameter).slice(0, 140)}</span>{/if}</div>
-                    {/if}
-                    {#if a.body}<div class="mt-1 text-xs leading-relaxed {a.type === 'error' ? 'text-coral' : 'text-foreground/90'}">{a.body}</div>{/if}
-                  </li>
-                {/each}
-              </ol>
-            {/if}
-          </section>
-
-          <div class="border-border/60 border-t pt-4">
-            <button onclick={onDeleteCard} class="text-muted-foreground hover:text-coral text-xs">Delete card</button>
-          </div>
-        </div>
-
-        {#if openCardGate}
-          <div class="border-border bg-surface border-t p-4">
-            <div class="eyebrow text-coral mb-2">awaiting your review</div>
-            <textarea
-              bind:value={gateComment}
-              rows="2"
-              placeholder="Feedback for the agent — sent on Request changes…"
-              class="bg-inset border-border focus:border-marigold mb-2.5 w-full resize-none rounded-[7px] border px-2.5 py-2 text-xs outline-none"
-            ></textarea>
-            <div class="flex flex-wrap gap-1.5">
-              <Button size="sm" onclick={() => onResolve(openCardGate.id, 'approve', gateComment)}>Approve</Button>
-              <Button size="sm" variant="outline" onclick={() => onResolve(openCardGate.id, 'request_changes', gateComment)}>Request changes</Button>
-              <Button size="sm" variant="ghost" onclick={() => onResolve(openCardGate.id, 'reject', gateComment)}>Reject</Button>
-            </div>
-          </div>
-        {/if}
-      </aside>
-    </div>
+  <!-- card drawer: session replay + gate resolution (owned by CardDrawer) -->
+  {#if app.openCardId}
+    <CardDrawer />
   {/if}
 
   <!-- agents manager -->

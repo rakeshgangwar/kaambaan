@@ -1,8 +1,10 @@
 <script lang="ts">
   import type { Card, Reference } from '$lib/api';
+  import { resolveGate, type GateDecision } from '$lib/api';
   import { app } from '$lib/stores/app.svelte';
   import { agentColor, initialOf } from '$lib/components/agentColor';
   import { cardDraggable } from '$lib/dnd';
+  import { Button } from '$lib/components/ui/button';
 
   interface Props {
     card: Card;
@@ -97,6 +99,20 @@
     if (e.key === 'Enter') {
       e.preventDefault();
       app.openCard(card.id);
+    }
+  }
+
+  // Gate quick-actions (approve / request_changes / reject) shown directly on the tile
+  // so the operator can act without opening the drawer — matches the gates.spec.ts expectation.
+  async function onGateResolve(e: MouseEvent, decision: GateDecision): Promise<void> {
+    e.stopPropagation(); // don't open the drawer
+    const bid = app.boardId;
+    const g = gate;
+    if (!bid || !g) return;
+    const res = await resolveGate(bid, g.id, decision);
+    if (res.ok) {
+      app.closeCard(); // close drawer if open for this card
+      await app.refresh();
     }
   }
 </script>
@@ -194,6 +210,25 @@
         class="costbar-fill {card.overBudget ? 'costbar-fill-over' : ''}"
         style="width:{card.overBudget ? 100 : costBarPct}%"
       ></span>
+    </div>
+  {/if}
+
+  <!-- gate quick-actions: Approve / Request changes / Reject — visible directly on the tile -->
+  {#if gate}
+    <div class="mt-2.5 flex flex-wrap gap-1.5" role="group" aria-label="Gate actions">
+      {#each (gate.options.length > 0 ? gate.options : [
+        { name: 'approve', title: 'Approve', interactive: false },
+        { name: 'request_changes', title: 'Request changes', interactive: true },
+        { name: 'reject', title: 'Reject', interactive: false },
+      ]) as opt (opt.name)}
+        {#if opt.name === 'approve'}
+          <Button size="sm" onclick={(e: MouseEvent) => onGateResolve(e, 'approve')}>{opt.title}</Button>
+        {:else if opt.name === 'request_changes'}
+          <Button size="sm" variant="outline" onclick={() => app.openCard(card.id)}>{opt.title}</Button>
+        {:else if opt.name === 'reject'}
+          <Button size="sm" variant="ghost" onclick={(e: MouseEvent) => onGateResolve(e, 'reject')}>{opt.title}</Button>
+        {/if}
+      {/each}
     </div>
   {/if}
 </div>

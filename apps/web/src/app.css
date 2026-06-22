@@ -271,6 +271,45 @@
       box-shadow: 0 0 0 0 transparent;
     }
   }
+
+  /* ---- card drawer: section headers, plan, criteria, activity stream, gate ---- */
+
+  /* section header */
+  .sec-h {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* plan step: done state */
+  .step-box-done {
+    background: var(--live);
+    border-color: var(--live);
+    color: #0f1118;
+  }
+
+  /* acceptance criteria marker */
+  .ac li::marker {
+    color: var(--marigold);
+  }
+
+  /* activity stream icons by type */
+  .act-thought .act-icon { color: var(--muted); }
+  .act-action  .act-icon { color: var(--marigold); }
+  .act-response .act-icon { color: var(--live); }
+  .act-elicitation .act-icon { color: var(--coral); }
+  .act-error .act-icon { color: var(--coral); }
+  .act:hover { background: var(--inset); }
+
+  /* elicitation / error body text */
+  .act-elicitation .act-body,
+  .act-error .act-body { color: var(--coral); }
 }
 
 @media (prefers-reduced-motion: reduce) {
