@@ -39,6 +39,7 @@
 }
 
 :root {
+  color-scheme: dark;
   --ink: #0f1118;
   --surface: #161924;
   --inset: #1d2130;
@@ -51,6 +52,23 @@
   --coral: #ff6b57;
   --coral-ink: #1c0805;
   --accent-bg: #232838;
+}
+
+/* Light theme — warm paper ground, indigo-ink text; the signature accents are darkened so they
+   keep AA contrast on a light surface. The body's marigold flight-grid references --ink, so it
+   adapts for free. Toggled by `data-theme="light"` on <html> (see app.html + the store). */
+[data-theme='light'] {
+  color-scheme: light;
+  --ink: #faf8f3;
+  --surface: #fffdf8;
+  --inset: #efeae0;
+  --line: #e1dacb;
+  --text: #1a1a2e;
+  --muted: #5d5f73;
+  --marigold: #c2740c;
+  --live: #0e9e86;
+  --coral: #d6442b;
+  --accent-bg: #efeae0;
 }
 
 @layer base {

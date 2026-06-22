@@ -28,8 +28,10 @@ import {
 } from '$lib/api';
 
 const BOARD_KEY = 'kaambaan.boardId';
+const THEME_KEY = 'kaambaan.theme';
 
 export type Screen = 'board' | 'triage' | 'telemetry';
+export type Theme = 'dark' | 'light';
 export type View = 'board' | 'list';
 export type ListGroupBy = 'stage' | 'state' | 'owner' | 'priority';
 export interface CardFilters {
@@ -60,6 +62,7 @@ class AppStore {
 
   // navigation + view
   screen = $state<Screen>('board');
+  theme = $state<Theme>('dark');
   view = $state<View>('board');
   listGroupBy = $state<ListGroupBy>('stage');
   filters = $state<CardFilters>({ states: [], owners: [], minPriority: null, needsReview: false, live: false, overBudget: false });
@@ -111,6 +114,7 @@ class AppStore {
 
   // ---- actions ----
   async init(): Promise<void> {
+    this.initTheme();
     try {
       this.user = await getMe();
       if (!this.user) {
@@ -240,6 +244,23 @@ class AppStore {
   }
   setScreen(s: Screen): void {
     this.screen = s;
+  }
+  /** Mirror the theme the inline app.html script already applied to <html> into reactive state. */
+  initTheme(): void {
+    const current = document.documentElement.getAttribute('data-theme');
+    this.theme = current === 'light' ? 'light' : 'dark';
+  }
+  setTheme(t: Theme): void {
+    this.theme = t;
+    document.documentElement.setAttribute('data-theme', t);
+    try {
+      localStorage.setItem(THEME_KEY, t);
+    } catch {
+      /* private mode / storage disabled — the toggle still works for this session */
+    }
+  }
+  toggleTheme(): void {
+    this.setTheme(this.theme === 'dark' ? 'light' : 'dark');
   }
   setView(v: View): void {
     this.view = v;
