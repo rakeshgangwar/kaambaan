@@ -29,8 +29,8 @@ test('telemetry screen shows spend', async ({ page }) => {
   await expect(page.getByText('Backlog', { exact: true })).toBeVisible();
   // navigate to telemetry via the rail button
   await page.getByRole('button', { name: /Telemetry/i }).click();
-  // the spend metric heading must be visible
-  await expect(page.getByText(/Spend/i)).toBeVisible();
+  // the spend metric heading must be visible (specific text — "Spend" appears in several places)
+  await expect(page.getByText('Spend / budget')).toBeVisible();
 });
 
 test('telemetry screen shows "By agent" panel', async ({ page }) => {
