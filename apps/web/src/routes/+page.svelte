@@ -27,7 +27,7 @@
   import NewBoardDialog from '$lib/components/NewBoardDialog.svelte';
   import BoardSettings from '$lib/components/BoardSettings.svelte';
   import BoardKanban from '$lib/components/board/BoardKanban.svelte';
-  import { app } from '$lib/stores/app.svelte';
+  import { app, type CardFilters } from '$lib/stores/app.svelte';
 
   // ---- store aliases (single source of truth) ----
   const board = $derived(app.board);
@@ -66,7 +66,8 @@
   let title = $state('');
 
   // card drawer (session replay, docs/07 §4)
-  let openCardId = $state<string | null>(null);
+  // openCardId is the single source of truth — owned by the store so CardTile can open the drawer
+  const openCardId = $derived(app.openCardId);
   let cardDetail = $state<CardActivities | null>(null);
   let drawerAttempts = $state<Attempt[]>([]);
   let cardEstimate = $state<Estimate | null>(null);
@@ -82,8 +83,7 @@
 
   let showNotifications = $state(false);
 
-  // views + filters (Linear-style) – kept local so filter state is per-session
-  type CardFilters = { states: string[]; owners: string[]; minPriority: number | null; needsReview: boolean; live: boolean; overBudget: boolean };
+  // views + filters (Linear-style) – kept local so filter state is per-session; synced to store via $effect
   let view = $state<'board' | 'list'>('board');
   let listGroupBy = $state<'stage' | 'state' | 'owner' | 'priority'>('stage');
   let showFilterMenu = $state(false);
@@ -238,19 +238,36 @@
   }
 
   // ---- drawer ----
+  // $effect: watch app.openCardId (the single source of truth) and drive the drawer
+  $effect(() => {
+    const id = app.openCardId;
+    if (id !== null) {
+      // Card was opened (by CardTile or by openDrawer in list/history)
+      gateComment = '';
+      void refreshDrawer();
+    } else {
+      // Card was closed — reset local drawer state
+      cardDetail = null;
+      drawerAttempts = [];
+      cardEstimate = null;
+      editing = false;
+      newRefUrl = '';
+    }
+  });
+
+  // $effect: sync page-local filters → store so BoardKanban sees them
+  $effect(() => {
+    app.filters = { ...filters };
+  });
+
   async function openDrawer(cardId: string): Promise<void> {
-    openCardId = cardId;
-    gateComment = '';
-    await refreshDrawer();
+    app.openCard(cardId);
+    // The $effect above will run refreshDrawer() when app.openCardId becomes non-null
   }
 
   function closeDrawer(): void {
-    openCardId = null;
-    cardDetail = null;
-    drawerAttempts = [];
-    cardEstimate = null;
-    editing = false;
-    newRefUrl = '';
+    app.closeCard();
+    // The $effect above will reset local drawer state when app.openCardId becomes null
   }
 
   function startEdit(): void {
