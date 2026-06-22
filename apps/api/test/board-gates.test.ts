@@ -51,6 +51,28 @@ describe('BoardDO — approval gates', () => {
     });
   });
 
+  it('a manual move off a gated stage clears the pending gate and unwedges the card', async () => {
+    await runInDurableObject(stubFor('g-move-unwedge'), async (board: BoardDO) => {
+      const { cardId } = await openReviewGate(board);
+      // Precondition: the card is wedged on the gate — input-required with one pending gate.
+      let state = await board.getState();
+      expect(state.cards[0]!.state).toBe('input-required');
+      expect(state.gates.filter((g) => g.status === 'pending')).toHaveLength(1);
+
+      // A human drags the card off the gate into the next stage.
+      const moved = await board.moveCard(cardId, 'publish', 'usr_x');
+      expect(moved.ok).toBe(true);
+      if (moved.ok) expect(moved.value.state).toBe('submitted');
+
+      // The move clears the pending gate and leaves the card claimable again (no wedge).
+      state = await board.getState();
+      expect(state.cards[0]!.currentStageKey).toBe('publish');
+      expect(state.cards[0]!.state).toBe('submitted');
+      expect(state.gates.filter((g) => g.status === 'pending')).toHaveLength(0);
+      expect((await board.claim({ agentId: 'agt_p', capabilities: ['publish'] })).claimed).toBe(true);
+    });
+  });
+
   it('approve advances the card past the gate, carrying the handoff', async () => {
     await runInDurableObject(stubFor('g-approve'), async (board: BoardDO) => {
       const { gateId } = await openReviewGate(board);
