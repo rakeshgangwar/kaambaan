@@ -7,6 +7,10 @@ plan for the work *after* [10 — Roadmap](./10-roadmap.md)'s P0→P7 (we shippe
 through **P14 / v0.0.1**; see [`CHANGELOG.md`](../CHANGELOG.md)). It continues the
 phase numbering at **P15**.
 
+> 🖼 A clickable, high-fidelity **wireframe** realizing these patterns in the flight-deck identity
+> lives at [`docs/wireframes/flight-deck.html`](./wireframes/flight-deck.html) (open in a browser).
+> Design spec: [`superpowers/specs/2026-06-22-kaambaan-flight-deck-wireframe-design.md`](./superpowers/specs/2026-06-22-kaambaan-flight-deck-wireframe-design.md).
+
 > **Scope decision (recorded).** The owner chose **literal full parity** —
 > including the contested planning machinery (cycles, projects, roadmaps,
 > insights, SSO) — accepting a **~9–15 month** envelope and that a few items get
