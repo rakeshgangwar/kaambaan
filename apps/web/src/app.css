@@ -433,6 +433,145 @@
     font-size: 10.5px;
     color: var(--muted);
   }
+
+  /* ---- telemetry screen ---- */
+  .tele-pad {
+    padding: 20px 22px 32px;
+    max-width: 1180px;
+  }
+
+  /* metric card grid: 4 cols → 2 on narrow */
+  .tele-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 13px;
+    margin-bottom: 13px;
+  }
+  @media (max-width: 1100px) {
+    .tele-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  .tele-metric {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 15px;
+  }
+  .tele-metric-k {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+  .tele-metric-v {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 27px;
+    margin-top: 7px;
+    letter-spacing: -0.01em;
+  }
+
+  /* budget burn bar inside metric card */
+  .tele-burn {
+    height: 6px;
+    border-radius: 6px;
+    background: var(--inset);
+    margin-top: 11px;
+    overflow: hidden;
+  }
+  .tele-burn > i {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, var(--marigold), #ffcf73);
+    transition: width 1.2s ease;
+  }
+  .tele-burn-over > i {
+    background: var(--coral);
+  }
+
+  /* two-column layout for panels */
+  .tele-two {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 13px;
+  }
+  @media (max-width: 860px) {
+    .tele-two { grid-template-columns: 1fr; }
+  }
+
+  /* panel card */
+  .tele-panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 16px 4px 10px;
+  }
+  .tele-panel-h {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 14px;
+    padding: 0 16px 12px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 4px;
+  }
+
+  /* bar rows inside panels */
+  .tele-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    padding: 10px 16px 6px;
+  }
+  .tele-barrow {
+    display: grid;
+    grid-template-columns: 110px 1fr 56px;
+    align-items: center;
+    gap: 12px;
+    font-size: 12.5px;
+  }
+  .tele-barrow-wide {
+    grid-template-columns: 160px 1fr 56px;
+  }
+  .tele-track {
+    height: 8px;
+    background: var(--inset);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .tele-track > i {
+    display: block;
+    height: 100%;
+    background: var(--live);
+    border-radius: 8px;
+    transition: width 1.2s ease;
+  }
+  .tele-num {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    text-align: right;
+  }
+
+  /* agent avatar in bar list */
+  .tele-av {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+  }
+
+  /* empty state */
+  .tele-empty {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    padding: 10px 16px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
