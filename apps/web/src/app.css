@@ -434,6 +434,197 @@
     color: var(--muted);
   }
 
+  /* ---- triage screen ---- */
+  .triage-pad {
+    padding: 24px 28px 40px;
+    max-width: 860px;
+  }
+  .triage-header {
+    margin-bottom: 28px;
+  }
+  .triage-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 26px;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 4px;
+  }
+  .triage-count {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--coral);
+    color: var(--coral-ink);
+    border-radius: 20px;
+    padding: 2px 8px;
+    vertical-align: middle;
+  }
+  .triage-sub {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  /* empty state */
+  .triage-empty-state {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 18px 20px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .triage-empty-icon {
+    color: var(--live);
+    font-size: 16px;
+    flex: none;
+  }
+
+  /* section wrapper */
+  .triage-section {
+    margin-bottom: 28px;
+  }
+  .triage-sep {
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+    margin-left: 8px;
+  }
+
+  /* needs-you list */
+  .triage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* individual needs-you row */
+  .triage-item {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--coral);
+    border-radius: var(--radius-lg);
+    padding: 13px 15px;
+    transition: border-color 0.12s ease;
+  }
+  .triage-item:hover {
+    border-color: color-mix(in srgb, var(--coral) 55%, var(--line));
+  }
+  .triage-item-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 11px;
+    flex-wrap: wrap;
+  }
+  .triage-item-title {
+    font-weight: 500;
+    font-size: 14px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .triage-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(255, 107, 87, 0.13);
+    color: var(--coral);
+    border-radius: 20px;
+    padding: 2px 7px;
+    flex: none;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .triage-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--ink);
+    flex: none;
+  }
+  .triage-stage {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--muted);
+    flex: none;
+  }
+  .triage-item-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  .triage-review-btn {
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--marigold);
+    background: rgba(244, 165, 38, 0.1);
+    border: 1px solid rgba(244, 165, 38, 0.22);
+    border-radius: var(--radius-md);
+    padding: 5px 13px;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  .triage-review-btn:hover {
+    background: rgba(244, 165, 38, 0.18);
+  }
+
+  /* activity list */
+  .triage-activity-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .triage-activity-item {
+    display: grid;
+    grid-template-columns: 10px 1fr auto;
+    align-items: start;
+    gap: 10px;
+    padding: 9px 11px;
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    font-size: 12.5px;
+  }
+  .triage-activity-item:hover {
+    background: var(--inset);
+  }
+  .triage-activity-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--marigold);
+    margin-top: 4px;
+    flex: none;
+  }
+  .triage-activity-body {
+    color: var(--text);
+    line-height: 1.4;
+  }
+  .triage-activity-time {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--muted);
+    white-space: nowrap;
+    flex: none;
+    padding-top: 1px;
+  }
+
   /* ---- telemetry screen ---- */
   .tele-pad {
     padding: 20px 22px 32px;

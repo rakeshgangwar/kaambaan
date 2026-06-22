@@ -46,3 +46,23 @@ test('telemetry screen shows "By model" panel', async ({ page }) => {
   await page.getByRole('button', { name: /Telemetry/i }).click();
   await expect(page.getByText(/By model/i)).toBeVisible();
 });
+
+test('triage screen shows "Needs You" heading', async ({ page }) => {
+  await page.goto('/');
+  // wait for the flight-deck shell to render
+  await expect(page.getByText('Backlog', { exact: true })).toBeVisible();
+  // navigate to triage via the rail button
+  await page.getByRole('button', { name: /Triage/i }).click();
+  // the heading must be visible
+  await expect(page.getByRole('heading', { name: /Needs You/i })).toBeVisible();
+});
+
+test('triage screen shows empty-state copy when no gates', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText('Backlog', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /Triage/i }).click();
+  // heading always visible
+  await expect(page.getByRole('heading', { name: /Needs You/i })).toBeVisible();
+  // with a fresh board (no gated/failed/over-budget cards) the empty state shows
+  await expect(page.getByText(/All clear — nothing needs you\./i)).toBeVisible();
+});
