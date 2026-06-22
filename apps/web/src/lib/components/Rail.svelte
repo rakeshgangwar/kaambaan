@@ -1,5 +1,11 @@
 <script lang="ts">
   import { app } from '$lib/stores/app.svelte';
+  import { logout } from '$lib/api';
+
+  async function signOut(): Promise<void> {
+    await logout();
+    location.reload();
+  }
 </script>
 
 <nav
@@ -121,6 +127,13 @@
         </span>
       {/if}
       <span class="mono min-w-0 truncate text-[11px]" style="color:var(--muted)">{app.user.name ?? app.user.login}</span>
+      <button
+        onclick={() => void signOut()}
+        title="Sign out"
+        aria-label="Sign out"
+        class="mono hover:text-coral ml-auto shrink-0 rounded-[6px] px-1.5 py-1 text-[12px]"
+        style="color:var(--muted)"
+      >⏻</button>
     </div>
   {/if}
 </nav>
