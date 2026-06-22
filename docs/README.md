@@ -28,6 +28,8 @@ deliberately rather than by accident.
 | 09 | [Testing Strategy (TDD)](./09-testing-strategy.md) | The TDD loop, test pyramid, DO/alarm/Workflow testing, required suites, the agent conformance kit | ✅ Draft |
 | 10 | [Roadmap](./10-roadmap.md) | Phased delivery P0→P7; the P4 demo milestone | ✅ Draft |
 | 11 | [Prior Art & Market Scan](./11-prior-art-and-market-scan.md) | The landscape, cross-cutting learnings, what we avoid, the strategic whitespace | ✅ Draft |
+| 12 | [Deploy (Cloudflare)](./12-deploy.md) | One Worker, same-origin; continuous deploy, bindings, secrets, D1 migrations | ✅ Draft |
+| 13 | [Linear Parity Program](./13-linear-parity-program.md) | The post-v0.0.1 plan (P15+) to reach Linear feature parity — the two foundational decisions, and what fits vs. fights the thesis | 🚧 Proposed |
 
 ## The one-paragraph design
 

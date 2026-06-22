@@ -83,7 +83,51 @@ and local-runner shapes did not become durable standalone products. The defensib
   local-first ships.
 - **Cost/observability as a first-class, per-tenant feature** — fills the field's biggest gap.
 
-## 6. Sources
+## 6. 2026 landscape refresh (June 2026)
+
+Re-scanned post-v0.0.1. The design-time scan above still holds — every §1–§5 learning survived —
+but the field moved fast. The deltas that matter:
+
+**Status changes.**
+
+| Tool | Change |
+|---|---|
+| **Vibe Kanban** (Bloop) | Company **sunset 2026-04-10**; repo continues community-maintained (Apache-2.0). Confirms §4's "closest analog is being sunset." |
+| **Height** | **Shut down 2025-09-24.** |
+| **Tegon** | **Archived 2025-06** (team → CORE). Its omni-channel **Triage inbox** is the best single UX idea still worth lifting. |
+| **Crystal** | → **Nimbalyst** (renamed/succeeded). |
+| **AutoGen** | **Maintenance mode**; superseded by **Microsoft Agent Framework** (GA 2026-04). |
+| **ACP** (IBM/BeeAI) | **Merged into A2A (2025-09) — dead.** Our "ACP as a native transport" note in [05](./05-integration-surfaces.md) collapses to A2A. |
+
+**New entrants worth tracking** — none existed at design time:
+
+| Tool | What it is | Closest-to-us signal |
+|---|---|---|
+| **Multica** (Apache-2.0, 37k★) | Agent-first Kanban; assign issues to agents; Squads + Skills; multi-runtime | The closest OSS **board** analog |
+| **Preloop** (Apache-2.0) | Agent **control plane**: MCP firewall, model gateway, async approvals, audit | The closest **control-plane/governance** analog |
+| **agent-kanban** (saltbo) | Board with **Ed25519-signed cards/PRs**, dep cycles, auto-complete-on-merge | Crypto agent identity for untrusted runtimes |
+| **Hermes Kanban** (Nous, MIT) | Shared `kanban.db`; dispatcher claims `ready` → worker; `complete`/`block` verbs | Verb model nearly identical to ours |
+| **GitHub Agent HQ + Mission Control** | Multi-vendor agent command center (GA 2026-06) | The competitor-shaped supervise-a-fleet UX bar |
+| **Plane** (AGPL-3.0, 52k★) | OSS Linear alt: agents-as-assignees, triage agents, native MCP | Nearest OSS feature-map to our premise |
+| **Intent** (Augment), **Cline Kanban**, **Composio AO**, **Factory** | Plan→approve→verify flows, dependency-chained cards, ticket-as-unit | Gated-pipeline patterns ([13 §6](./13-linear-parity-program.md)) |
+
+**The whitespace still holds.** Even with Multica, Preloop, and Plane, no one occupies the full
+union from §4: Multica is a board but **orchestrates runtimes it half-owns**; Preloop is a
+**governance plane, not a board/pipeline**; Plane is **human-issue-first**. *Multi-tenant ·
+harness-agnostic · domain-agnostic · real human gates · external agents anywhere* remains
+unoccupied — the competition **validates** the shape rather than taking it.
+
+**Protocol bets validated.** **A2A v1.0** (Linux Foundation) + **MCP** + **AG-UI** went mainstream
+in 2026 — CrewAI, Microsoft Agent Framework, Google ADK, and LangGraph all speak A2A + MCP; OpenAI
+is the lone A2A holdout; **ACP is dead**. This confirms the A2A-spine + MCP-dispatch bet
+([00](./00-vision-and-principles.md) Principle 7); **AG-UI** is the natural addition for the
+HITL/UI streaming layer. The concrete, transferable patterns this scan surfaced are catalogued in
+[13 — Linear Parity Program §6](./13-linear-parity-program.md).
+
+*(Sources for this refresh: live web scan, June 2026 — the repos, changelogs, and announcements of
+the tools named above.)*
+
+## 7. Sources
 
 Captured in team memory `kaambaan-research-sources`. Primary: Linear developer docs, Hermes docs,
 Vibe Kanban (BloopAI), Conductor/Claude Squad/Crystal/Sculptor, Devin & Factory docs, GitHub Copilot

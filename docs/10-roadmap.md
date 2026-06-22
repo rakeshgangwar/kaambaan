@@ -60,6 +60,16 @@ human gate, live on a multi-tenant board.*
   `manager`).
 - **ACP** bridge; harden Codex/OpenCode/Cloudflare-Agents adapters; expand the conformance matrix.
 
+## P8–P14 — shipped (v0.0.1)
+Frontend "agent flight deck", card drawer, real auth + deploy, usability, pipeline builder,
+budgets, richer cards, settings, templates, and the Linear-style **List view + filters** landed
+across P8→P14 — tagged **[v0.0.1 "First Flight"](../CHANGELOG.md)**.
+
+## P15+ — Linear parity
+The post-v0.0.1 program — reaching feature parity with Linear (card depth, comments, command
+palette, teams/states, projects, the contested planning machinery) — is planned in
+[13 — Linear Parity Program](./13-linear-parity-program.md), which continues this phase numbering.
+
 ## Beyond v1 (candidate backlog)
 Policy/auto gates · action-level autonomy levels (allow/deny/blocklist) · confidence routing ·
 board/pipeline templates · MCP resources/prompts (board snapshots) · deeper doc-provider
